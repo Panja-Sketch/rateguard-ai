@@ -66,4 +66,3 @@ def test_round_expression_validation() -> None:
                 LiteralValue(value=3),
             ],
         )
-

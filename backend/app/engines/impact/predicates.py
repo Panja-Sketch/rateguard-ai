@@ -85,4 +85,3 @@ def derive_predicate_from_difference(
         )
 
     return None
-

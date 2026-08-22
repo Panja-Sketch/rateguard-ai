@@ -55,4 +55,3 @@ class InMemoryRunStore(BaseRunStore):
     def get_evidence(self, run_id: str) -> list[EvidenceRecord]:
         with self._lock:
             return list(self._evidence.get(run_id, []))
-

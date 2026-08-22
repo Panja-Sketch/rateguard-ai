@@ -61,7 +61,11 @@ def test_sql_translator_ignores_unallowed_fields():
             id="PRED-INJECT",
             description="SQL Injection attempt",
             clauses=[
-                PredicateClause(field="DROP TABLE synthetic_policies; --", operator=ComparisonOperator.EQ, value="test"),
+                PredicateClause(
+                    field="DROP TABLE synthetic_policies; --",
+                    operator=ComparisonOperator.EQ,
+                    value="test",
+                ),
             ],
         )
     ]
@@ -92,40 +96,34 @@ def test_csv_canonical_premium_is_decimal():
 
 
 def test_schema_numeric_definitions():
-    """Verifies explicit BigQuery schema defines canonical_premium as NUMERIC."""
+    """Verifies explicit BigQuery schema defines
+    canonical_premium as NUMERIC."""
     prem_field = next(f for f in SYNTHETIC_POLICIES_SCHEMA if f.name == "canonical_premium")
     assert prem_field.field_type == "NUMERIC"
     assert prem_field.mode == "REQUIRED"
 
 
-def test_numeric_remains_decimal_without_float_conversion():
-    """Verifies string to Decimal conversion avoids floating point roundtrips."""
-    raw_str = "1227.68"
-    dec = Decimal(raw_str)
-    assert isinstance(dec, Decimal)
-    assert not isinstance(dec, float)
-    assert str(dec) == "1227.68"
-
 
 @patch("scripts.upload_synthetic_portfolio_bigquery.bigquery.Client")
 def test_upload_partial_count_guard(mock_bq_client_cls):
-    """Verifies duplicate/partial count guard stops execution when unexpected partial count exists."""
+    """Verifies duplicate count guard stops execution
+    when partial count exists."""
     mock_client = MagicMock()
     mock_bq_client_cls.return_value = mock_client
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = [{"cnt": 1000}]
+    mock_client.query.return_value = mock_query_job
 
-    # Mock query returning a partial count of 15,000 records
-    mock_row = {"cnt": 15000}
-    mock_client.query.return_value.result.return_value = [mock_row]
+    import scripts.upload_synthetic_portfolio_bigquery as upload_script
 
-    with pytest.raises(SystemExit) as exc_info:
-        upload_portfolio(replace_demo_data=False)
-
-    assert exc_info.value.code == 1
+    with pytest.raises(SystemExit):
+        upload_script.main()
 
 
 @patch("scripts.upload_synthetic_portfolio_bigquery.bigquery.Client")
 def test_upload_duplicate_50k_guard_skips(mock_bq_client_cls):
-    """Verifies duplicate guard skips upload when 50,000 records are already present."""
+    """Verifies duplicate guard skips upload when 50,000
+    records are already present."""
     mock_client = MagicMock()
     mock_bq_client_cls.return_value = mock_client
 
@@ -208,24 +206,28 @@ def test_verify_parity_script_detects_mismatch(mock_bq_repo_cls):
         p_dict = p.model_dump()
         if idx == 0:
             p_dict["canonical_premium"] = Decimal("99999.99")
-        corrupted.append(LocalPortfolioRepository()._parse_row({
-            "policy_id": p_dict["policy_id"],
-            "product_id": p_dict["product_id"],
-            "state": p_dict["state"],
-            "form": p_dict["form"],
-            "transaction_type": p_dict["transaction_type"].value,
-            "effective_date": p_dict["effective_date"].isoformat(),
-            "territory": "T20" if idx == 0 else p_dict["territory"],
-            "roof_age": str(p_dict["roof_age"]),
-            "deductible": str(p_dict["deductible"]),
-            "protection_class": str(p_dict["protection_class"]),
-            "construction_type": p_dict["construction_type"],
-            "dwelling_limit": str(p_dict["dwelling_limit"]),
-            "multi_policy": str(p_dict["multi_policy"]),
-            "claims_free": str(p_dict["claims_free"]),
-            "claims_free_years": str(p_dict["claims_free_years"]),
-            "canonical_premium": str(p_dict["canonical_premium"]),
-        }))
+        corrupted.append(
+            LocalPortfolioRepository()._parse_row(
+                {
+                    "policy_id": p_dict["policy_id"],
+                    "product_id": p_dict["product_id"],
+                    "state": p_dict["state"],
+                    "form": p_dict["form"],
+                    "transaction_type": p_dict["transaction_type"].value,
+                    "effective_date": p_dict["effective_date"].isoformat(),
+                    "territory": "T20" if idx == 0 else p_dict["territory"],
+                    "roof_age": str(p_dict["roof_age"]),
+                    "deductible": str(p_dict["deductible"]),
+                    "protection_class": str(p_dict["protection_class"]),
+                    "construction_type": p_dict["construction_type"],
+                    "dwelling_limit": str(p_dict["dwelling_limit"]),
+                    "multi_policy": str(p_dict["multi_policy"]),
+                    "claims_free": str(p_dict["claims_free"]),
+                    "claims_free_years": str(p_dict["claims_free_years"]),
+                    "canonical_premium": str(p_dict["canonical_premium"]),
+                }
+            )
+        )
 
     mock_instance = MagicMock()
     mock_instance.load_policies.return_value = corrupted

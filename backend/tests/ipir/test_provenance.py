@@ -31,4 +31,3 @@ def test_provenance_invalid_confidence_too_high() -> None:
 def test_provenance_invalid_confidence_negative() -> None:
     with pytest.raises(ValidationError, match="must be between 0 and 1 inclusive"):
         Provenance(interpretation_confidence=Decimal("-0.1"))
-

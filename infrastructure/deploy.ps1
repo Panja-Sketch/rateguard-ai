@@ -1,58 +1,132 @@
-# RateGuard AI -- Google Cloud Deployment Automation Script (PowerShell)
+# RateGuard AI -- Production Cloud Deployment Automation Script (PowerShell)
 
 $ErrorActionPreference = "Stop"
 
 $PROJECT_ID = "rateguard-ai"
 $REGION = "us-central1"
-$SERVICE_ACCOUNT = "rateguard-runtime@rateguard-ai.iam.gserviceaccount.com"
+$RUNTIME_SA = "rateguard-runtime@rateguard-ai.iam.gserviceaccount.com"
+$PUBSUB_PUSH_SA = "rateguard-pubsub-push@rateguard-ai.iam.gserviceaccount.com"
 
 Write-Host "========================================================"
-Write-Host "   RateGuard AI -- Google Cloud Deployment Automation   "
+Write-Host "   RateGuard AI -- Production Cloud Deployment          "
 Write-Host "   Project: $PROJECT_ID | Region: $REGION"
 Write-Host "========================================================"
 
 gcloud config set project "$PROJECT_ID"
 
-# 1. Deploy RateGuard API Backend to Cloud Run
-Write-Host "`n1. Deploying Backend API to Cloud Run..."
+# 1. Idempotent Service Account Setup & Least-Privilege IAM Roles
+Write-Host "`n1. Verifying and configuring Service Accounts..."
+
+# Runtime SA
+$saExists = $null
+try {
+  $saExists = gcloud iam service-accounts describe "$RUNTIME_SA" --format="value(email)" 2>$null
+} catch {}
+
+if (-not $saExists) {
+  Write-Host "   Creating Runtime Service Account ($RUNTIME_SA)..."
+  gcloud iam service-accounts create rateguard-runtime `
+    --display-name="RateGuard Runtime Service Account"
+} else {
+  Write-Host "   Runtime Service Account exists: $RUNTIME_SA"
+}
+
+# Grant least-privilege roles to Runtime SA
+$RUNTIME_ROLES = @(
+  "roles/aiplatform.user",       # Vertex AI / Gemini 3.7 Flash invocation
+  "roles/datastore.user",        # Firestore read/write
+  "roles/bigquery.dataEditor",   # BigQuery results table write
+  "roles/bigquery.jobUser",      # BigQuery query execution
+  "roles/storage.objectUser",    # Cloud Storage artifact access
+  "roles/pubsub.publisher"      # Pub/Sub message publishing
+)
+
+foreach ($role in $RUNTIME_ROLES) {
+  Write-Host "   Granting $role to Runtime SA..."
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" `
+    --member="serviceAccount:$RUNTIME_SA" `
+    --role="$role" | Out-Null
+}
+
+# Pub/Sub Push SA
+$pushSaExists = $null
+try {
+  $pushSaExists = gcloud iam service-accounts describe "$PUBSUB_PUSH_SA" --format="value(email)" 2>$null
+} catch {}
+
+if (-not $pushSaExists) {
+  Write-Host "   Creating Pub/Sub Push Service Account ($PUBSUB_PUSH_SA)..."
+  gcloud iam service-accounts create rateguard-pubsub-push `
+    --display-name="RateGuard PubSub Push Invoker SA"
+} else {
+  Write-Host "   Pub/Sub Push Service Account exists: $PUBSUB_PUSH_SA"
+}
+
+# 2. Deploy Public API Cloud Run Service (rateguard-api)
+Write-Host "`n2. Deploying Public API Service (rateguard-api)..."
 gcloud run deploy rateguard-api `
   --source ./backend `
   --region "$REGION" `
   --platform managed `
   --allow-unauthenticated `
-  --service-account "$SERVICE_ACCOUNT" `
-  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-1.5-pro-002"
+  --service-account "$RUNTIME_SA" `
+  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash"
 
 $API_URL = (gcloud run services describe rateguard-api --region "$REGION" --format "value(status.url)").Trim()
-Write-Host "   RateGuard API URL: $API_URL"
+Write-Host "   Public API URL: $API_URL"
 
-# 2. Configure Pub/Sub Push Subscription
-Write-Host "`n2. Configuring Pub/Sub Push Subscription ('assurance-worker')..."
-gcloud pubsub subscriptions modify-push-config assurance-worker `
-  --push-endpoint="${API_URL}/internal/pubsub/assurance" `
-  --push-auth-service-account="$SERVICE_ACCOUNT"
-
-# 3. Deploy RateGuard Frontend to Cloud Run
-Write-Host "`n3. Deploying Next.js Frontend to Cloud Run..."
-gcloud run deploy rateguard-web `
-  --source ./frontend `
+# 3. Deploy Private Worker Cloud Run Service (rateguard-worker)
+Write-Host "`n3. Deploying Private Worker Service (rateguard-worker)..."
+gcloud run deploy rateguard-worker `
+  --source ./backend `
   --region "$REGION" `
   --platform managed `
-  --allow-unauthenticated `
-  --set-env-vars NEXT_PUBLIC_RATEGUARD_API_URL="$API_URL"
+  --no-allow-unauthenticated `
+  --service-account "$RUNTIME_SA" `
+  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash"
+
+$WORKER_URL = (gcloud run services describe rateguard-worker --region "$REGION" --format "value(status.url)").Trim()
+Write-Host "   Private Worker URL: $WORKER_URL"
+
+# Grant roles/run.invoker to Pub/Sub Push SA on rateguard-worker
+Write-Host "   Granting roles/run.invoker to Pub/Sub Push SA on rateguard-worker..."
+gcloud run services add-iam-policy-binding rateguard-worker `
+  --region "$REGION" `
+  --member="serviceAccount:$PUBSUB_PUSH_SA" `
+  --role="roles/run.invoker" | Out-Null
+
+# 4. Configure Pub/Sub Subscription Push to Private Worker Endpoint
+Write-Host "`n4. Configuring Pub/Sub Subscription ('assurance-worker') Push to Private Worker..."
+gcloud pubsub subscriptions modify-push-config assurance-worker `
+  --push-endpoint="${WORKER_URL}/internal/pubsub/assurance" `
+  --push-auth-service-account="$PUBSUB_PUSH_SA"
+
+# 5. Build and Deploy Next.js Frontend with Embedded API URL (rateguard-web)
+Write-Host "`n5. Building and Deploying Frontend Web Dashboard (rateguard-web)..."
+gcloud builds submit ./frontend `
+  --tag "gcr.io/$PROJECT_ID/rateguard-web:latest" `
+  --substitutions "_NEXT_PUBLIC_RATEGUARD_API_URL=$API_URL"
+
+gcloud run deploy rateguard-web `
+  --image "gcr.io/$PROJECT_ID/rateguard-web:latest" `
+  --region "$REGION" `
+  --platform managed `
+  --allow-unauthenticated
 
 $WEB_URL = (gcloud run services describe rateguard-web --region "$REGION" --format "value(status.url)").Trim()
-Write-Host "   RateGuard Web Dashboard URL: $WEB_URL"
+Write-Host "   Public Web Dashboard URL: $WEB_URL"
 
-# 4. Update Backend CORS Config for Deployed Web Origin
-Write-Host "`n4. Updating Backend CORS for Deployed Web Origin..."
+# 6. Update Backend CORS Config for Deployed Web Origin
+Write-Host "`n6. Updating Backend CORS for Deployed Web Origin..."
 gcloud run services update rateguard-api `
   --region "$REGION" `
   --update-env-vars RATEGUARD_CORS_ORIGINS="[`"http://localhost:3000`",`"${WEB_URL}`"]"
 
 Write-Host "`n========================================================"
-Write-Host "DEPLOYMENT COMPLETE!"
-Write-Host "Public Web Dashboard: $WEB_URL"
-Write-Host "Public API URL:       $API_URL"
+Write-Host "DEPLOYMENT COMPLETED SUCCESSFULLY!"
+Write-Host "Public API Service:      $API_URL"
+Write-Host "Private Worker Service:  $WORKER_URL"
+Write-Host "Public Web Dashboard:    $WEB_URL"
+Write-Host "Pub/Sub Push Endpoint:   ${WORKER_URL}/internal/pubsub/assurance"
+Write-Host "Gemini Model:            gemini-3.7-flash"
 Write-Host "========================================================"
-

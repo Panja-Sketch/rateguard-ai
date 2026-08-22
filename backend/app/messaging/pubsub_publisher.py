@@ -36,4 +36,3 @@ class PubSubPublisher(BaseMessagePublisher):
         )
         msg_id = future.result(timeout=30)
         return str(msg_id)
-

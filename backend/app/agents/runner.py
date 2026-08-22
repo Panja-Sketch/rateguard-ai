@@ -26,4 +26,3 @@ class AgenticAssuranceRunner:
             portfolio_csv_path=portfolio_csv_path,
             run_id=run_id,
         )
-

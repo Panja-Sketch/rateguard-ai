@@ -30,4 +30,3 @@ def test_literal_value_decimal_preservation() -> None:
     val = LiteralValue(value=Decimal("1.35"))
     assert val.value == Decimal("1.35")
     assert isinstance(val.value, Decimal)
-

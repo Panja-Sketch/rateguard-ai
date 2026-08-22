@@ -38,4 +38,3 @@ class ImpactAnalysis(BaseModel):
     dependency_paths: list[list[str]] = Field(default_factory=list)
     candidate_risk_predicates: list[ImpactPredicate] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-

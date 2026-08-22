@@ -8,15 +8,13 @@ from app.ipir.package import IPIRPackage
 class ImpactAnalyzer:
     """Analyzes semantic diff results against an IPIR package dependency graph."""
 
-    def analyze(
-        self, diff_result: SemanticDiffResult, package: IPIRPackage
-    ) -> ImpactAnalysis:
+    def analyze(self, diff_result: SemanticDiffResult, package: IPIRPackage) -> ImpactAnalysis:
         """Derives downstream affected nodes, paths, outputs, and risk predicates.
-        
+
         Args:
             diff_result: SemanticDiffResult instance from comparator.
             package: Base IPIRPackage instance.
-            
+
         Returns:
             ImpactAnalysis detailing blast-radius and candidate risk predicates.
         """
@@ -73,4 +71,3 @@ class ImpactAnalyzer:
                 "diff_result_equal": diff_result.semantically_equal,
             },
         )
-

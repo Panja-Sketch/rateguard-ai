@@ -27,4 +27,3 @@ class ArtifactDescriptor(BaseModel):
     storage_uri: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-

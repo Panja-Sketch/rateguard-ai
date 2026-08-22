@@ -36,4 +36,3 @@ class PricingInput(BaseModel):
             raise ValueError(f"Boolean input '{self.id}' should not define allowed_values")
 
         return self
-

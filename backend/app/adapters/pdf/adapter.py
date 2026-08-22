@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 class PDFPricingAdapter(PricingSourceAdapter):
-    """Hybrid adapter utilizing deterministic text extraction and Gemini 3.5+ structured interpretation for PDF specs."""
+    """Hybrid adapter utilizing deterministic text extraction and 
+    Gemini 3.5+ schema validation."""
 
     adapter_id = "pdf_pricing_adapter"
-    supported_format = "PDF"
+    supported_formats: list[SourceFormat] = [SourceFormat.PDF]
 
     def to_ipir(
         self,
@@ -26,11 +27,13 @@ class PDFPricingAdapter(PricingSourceAdapter):
     ) -> AdapterResult:
         warnings = []
         requires_human_review = False
-        extraction_confidence = Decimal("0.95")
+        extraction_confidence = Decimal("0.90")
 
         # 1. Deterministic Text Extraction & Page Tracking
         root_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-        canonical_file = root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+        canonical_file = (
+            root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+        )
 
         with open(canonical_file, encoding="utf-8") as f:
             pkg = IPIRPackage.model_validate_json(f.read())
@@ -74,4 +77,3 @@ class PDFPricingAdapter(PricingSourceAdapter):
             provenance=prov,
             requires_human_review=requires_human_review,
         )
-

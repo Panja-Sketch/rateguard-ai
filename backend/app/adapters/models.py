@@ -42,4 +42,3 @@ class AdapterResult(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     provenance: Provenance
     requires_human_review: bool = False
-

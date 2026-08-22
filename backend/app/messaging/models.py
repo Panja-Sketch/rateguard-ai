@@ -17,4 +17,3 @@ class AssuranceJob(BaseModel):
     include_portfolio_analysis: bool = True
     requested_model: str = "gemini-3.7-flash"
     metadata: dict[str, Any] = Field(default_factory=dict)
-

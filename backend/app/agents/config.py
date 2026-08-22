@@ -4,7 +4,7 @@ from pydantic import BaseModel, field_validator
 
 
 def validate_gemini_model(model_name: str) -> str:
-    """Validates that configured Gemini model meets or exceeds the hackathon floor requirement (Gemini 3.5+)."""
+    """Validates model meets or exceeds Gemini 3.5+ hackathon floor."""
     norm = model_name.lower().strip()
 
     # Rejected pre-3.5 models
@@ -18,7 +18,7 @@ def validate_gemini_model(model_name: str) -> str:
     for prefix in rejected_prefixes:
         if norm.startswith(prefix):
             raise ValueError(
-                f"Configured model '{model_name}' is below the required Gemini 3.5+ hackathon floor. "
+                f"Configured model '{model_name}' is below Gemini 3.5+ floor. "
                 "RateGuard AI requires Gemini 3.5 or newer (default: 'gemini-3.7-flash')."
             )
 

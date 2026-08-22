@@ -36,4 +36,3 @@ def test_decimal_serialization_round_trip() -> None:
     assert package_reloaded.constants[0].value == Decimal("500.00")
     assert package_reloaded.tables[0].rows[2].value == Decimal("1.35")
     assert isinstance(package_reloaded.tables[0].rows[2].value, Decimal)
-

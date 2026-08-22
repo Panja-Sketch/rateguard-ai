@@ -54,4 +54,3 @@ class LiteralValue(BaseModel):
         if isinstance(self.value, float):
             # Prevent silent float precision loss by converting float to Decimal string
             object.__setattr__(self, "value", Decimal(str(self.value)))
-

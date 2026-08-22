@@ -79,7 +79,8 @@ def test_04_impact_predicates_derived_correctly() -> None:
     impact = analyzer.analyze(diff_res, canonical)
 
     roof_pred = next(
-        p for p in impact.candidate_risk_predicates
+        p
+        for p in impact.candidate_risk_predicates
         if "roof_age_factor" in p.id or "21..30" in p.id or "roof_age" in p.description
     )
     assert roof_pred is not None
@@ -91,4 +92,3 @@ def test_04_impact_predicates_derived_correctly() -> None:
     assert c_gte.value == 21
     assert c_lte.field == "roof_age"
     assert c_lte.value == 30
-

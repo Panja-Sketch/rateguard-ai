@@ -54,4 +54,3 @@ class InvestigationAgent:
             "summary": summary_text,
             "deterministic_data": recon_data,
         }
-

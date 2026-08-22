@@ -1,2 +1,1 @@
 """RateGuard AI Application Package."""
-

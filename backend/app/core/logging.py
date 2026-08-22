@@ -6,7 +6,7 @@ from app.core.config import get_settings
 
 def configure_logging(level: str | None = None) -> None:
     """Configures standard Python logging using a clean, readable structured format.
-    
+
     Args:
         level: Optional log level string override. Defaults to value from app settings.
     """
@@ -28,4 +28,3 @@ def configure_logging(level: str | None = None) -> None:
     # Set third-party loggers to WARNING to reduce noise
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-

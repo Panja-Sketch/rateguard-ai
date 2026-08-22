@@ -20,9 +20,7 @@ def format_match_key(row: TableRow) -> str:
     return "|".join(parts) if len(parts) > 1 else parts[0]
 
 
-def compare_rate_tables(
-    left_table: RateTable, right_table: RateTable
-) -> list[SemanticDifference]:
+def compare_rate_tables(left_table: RateTable, right_table: RateTable) -> list[SemanticDifference]:
     """Deterministically compares two RateTable instances using semantic dimension keys."""
     differences: list[SemanticDifference] = []
     table_id = left_table.id
@@ -93,4 +91,3 @@ def compare_rate_tables(
             )
 
     return differences
-

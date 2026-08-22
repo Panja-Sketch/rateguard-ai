@@ -36,4 +36,3 @@ def test_pricing_input_boolean_with_allowed_values() -> None:
             data_type=InputDataType.BOOLEAN,
             allowed_values=["yes", "no"],
         )
-

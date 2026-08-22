@@ -30,7 +30,9 @@ class ExcelPricingAdapter(PricingSourceAdapter):
         # 2. To ensure 100% semantic fidelity with sheet/row provenance tracking,
         # we read the underlying JSON source reference or construct canonical package from workbook.
         root_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-        canonical_file = root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+        canonical_file = (
+            root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+        )
 
         with open(canonical_file, encoding="utf-8") as f:
             pkg = IPIRPackage.model_validate_json(f.read())
@@ -67,4 +69,3 @@ class ExcelPricingAdapter(PricingSourceAdapter):
             provenance=prov,
             requires_human_review=False,
         )
-

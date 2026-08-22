@@ -27,4 +27,3 @@ def score_scenario(scenario: PricingTestScenario) -> float:
         score += 10.0
 
     return score
-

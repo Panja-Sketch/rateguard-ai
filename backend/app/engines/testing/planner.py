@@ -44,4 +44,3 @@ class PricingTestPlanner:
             },
             planning_metadata={"planner": "RateGuard Risk-Directed Test Planner 0.1"},
         )
-

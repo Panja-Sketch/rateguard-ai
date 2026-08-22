@@ -77,4 +77,3 @@ class GCSArtifactStore(BaseArtifactStore):
 
     def exists(self, artifact_id: str) -> bool:
         return self._fallback_store.exists(artifact_id)
-

@@ -10,4 +10,3 @@ def test_ipir_schema_generation() -> None:
     assert "inputs" in properties
     assert "tables" in properties
     assert "calculations" in properties
-

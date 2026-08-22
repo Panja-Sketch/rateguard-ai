@@ -35,7 +35,8 @@ def test_01_canonical_and_defective_files_exist_and_validate() -> None:
 
     roof_c = next(t for t in canonical.tables if t.id == "roof_age_factor")
     row_c = next(
-        r for r in roof_c.rows
+        r
+        for r in roof_c.rows
         if isinstance(r.matches[0], RangeMatch)
         and r.matches[0].minimum == Decimal("21")
         and r.matches[0].maximum == Decimal("30")
@@ -44,7 +45,8 @@ def test_01_canonical_and_defective_files_exist_and_validate() -> None:
 
     roof_d = next(t for t in defective.tables if t.id == "roof_age_factor")
     row_d = next(
-        r for r in roof_d.rows
+        r
+        for r in roof_d.rows
         if isinstance(r.matches[0], RangeMatch)
         and r.matches[0].minimum == Decimal("21")
         and r.matches[0].maximum == Decimal("30")
@@ -80,7 +82,8 @@ def test_04_diff_detects_effective_date_drift() -> None:
 
     res = compare_packages(canonical, defective)
     date_diff = next(
-        d for d in res.differences
+        d
+        for d in res.differences
         if (
             d.difference_type == DifferenceType.EFFECTIVE_DATE_CHANGE
             and d.node_id == "claims_free_discount"
@@ -114,4 +117,3 @@ def test_06_bidirectional_symmetry_and_reversal() -> None:
 
     assert roof_ab.left_value == roof_ba.right_value
     assert roof_ab.right_value == roof_ba.left_value
-

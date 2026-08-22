@@ -17,4 +17,3 @@ __all__ = [
     "matches_predicate",
     "reprice_policy",
 ]
-

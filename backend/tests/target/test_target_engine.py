@@ -86,4 +86,3 @@ def test_02_target_engine_roof_20_matches_canonical() -> None:
     assert oracle_res.resolved_values["roof_age_factor"] == Decimal("1.10")
     assert target_res.resolved_values["roof_age_factor"] == Decimal("1.10")
     assert oracle_res.final_premium == target_res.final_premium
-

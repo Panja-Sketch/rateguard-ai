@@ -83,4 +83,3 @@ def test_unknown_assurance_run_404():
 
     res_result = client.get("/api/v1/assurance/runs/RUN-NONEXISTENT/result")
     assert res_result.status_code == 404
-

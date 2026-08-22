@@ -77,4 +77,3 @@ def test_range_match_invalid() -> None:
 
     with pytest.raises(ValidationError, match="cannot have both minimum and maximum as None"):
         RangeMatch(minimum=None, maximum=None)
-

@@ -28,7 +28,7 @@ class ReconciliationEngine:
         pct_var = (
             (abs_var / exp_prem * Decimal("100")) if exp_prem != Decimal("0") else Decimal("0")
         )
-        premium_matches = (exp_prem == act_prem)
+        premium_matches = exp_prem == act_prem
 
         trace_diffs = align_and_compare_traces(expected.trace, actual.trace, package)
         trace_diverged = len(trace_diffs) > 0

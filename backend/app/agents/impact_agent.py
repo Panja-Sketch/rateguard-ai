@@ -55,4 +55,3 @@ class ImpactAgent:
             "summary": summary_text,
             "deterministic_data": impact_data,
         }
-

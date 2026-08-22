@@ -281,4 +281,3 @@ def compare_packages(left: IPIRPackage, right: IPIRPackage) -> SemanticDiffResul
         semantically_equal=len(differences) == 0,
         comparison_metadata={"diff_engine": "RateGuard Semantic Diff 0.1"},
     )
-

@@ -92,7 +92,11 @@ def test_platform_config_adapter():
     """Tests compiling platform config JSON to IPIRPackage."""
     root_dir = Path(__file__).resolve().parent.parent.parent.parent
     plat_file = (
-        root_dir / "data" / "implementations" / "platform_config" / "AZ_HO3_2026_09_platform_config.json"
+        root_dir
+        / "data"
+        / "implementations"
+        / "platform_config"
+        / "AZ_HO3_2026_09_platform_config.json"
     )
 
     with open(plat_file, "rb") as f:
@@ -110,4 +114,3 @@ def test_platform_config_adapter():
     res = adapter.to_ipir(desc, content)
     assert res.ipir_package.id == "AZ_HO3_2026_09"
     assert res.mapping_coverage == 100.0
-

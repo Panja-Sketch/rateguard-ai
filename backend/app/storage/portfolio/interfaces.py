@@ -35,4 +35,3 @@ class BasePortfolioRepository(ABC):
     def get_portfolio_summary(self) -> PortfolioSummaryStats:
         """Returns summary statistics for the portfolio dataset."""
         pass
-

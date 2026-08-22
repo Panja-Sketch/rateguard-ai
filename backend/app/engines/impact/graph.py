@@ -88,4 +88,3 @@ class PricingDependencyGraph:
         if source_id not in self.graph or target_id not in self.graph:
             return []
         return list(nx.all_simple_paths(self.graph, source_id, target_id))
-

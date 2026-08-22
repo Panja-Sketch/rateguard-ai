@@ -33,4 +33,3 @@ class BaseArtifactStore(ABC):
     def exists(self, artifact_id: str) -> bool:
         """Checks if an artifact exists."""
         pass
-

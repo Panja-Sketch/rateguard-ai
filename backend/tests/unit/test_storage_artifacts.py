@@ -40,4 +40,3 @@ def test_factory_returns_store():
     """Verifies factory returns a configured artifact store."""
     store = get_artifact_store()
     assert store is not None
-

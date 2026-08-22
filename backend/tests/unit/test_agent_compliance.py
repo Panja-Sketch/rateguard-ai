@@ -33,4 +33,3 @@ def test_agent_config_rejects_old_models():
     """Verifies AgentConfig fails validation when instantiated with pre-3.5 model."""
     with pytest.raises(ValidationError):
         AgentConfig(gemini_model="gemini-1.5-flash")
-

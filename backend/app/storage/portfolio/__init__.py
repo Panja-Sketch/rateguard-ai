@@ -27,4 +27,3 @@ __all__ = [
     "translate_predicates_to_bigquery_where",
     "get_portfolio_repository",
 ]
-

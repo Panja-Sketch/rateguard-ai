@@ -46,9 +46,7 @@ def test_full_ipir_package_creation() -> None:
                 maximum=100,
             )
         ],
-        constants=[
-            PricingConstant(id="base_rate", name="Base Rate", value=Decimal("500.00"))
-        ],
+        constants=[PricingConstant(id="base_rate", name="Base Rate", value=Decimal("500.00"))],
         calculations=[
             CalculationNode(
                 id="total_premium",
@@ -138,9 +136,7 @@ def test_nonexistent_output_source_ref_rejection() -> None:
                 jurisdiction=Jurisdiction(country="US", state_or_province="AZ"),
             ),
             effective_period=EffectivePeriod(start=date(2026, 1, 1)),
-            outputs=[
-                PricingOutput(id="final_out", name="Final Output", source_ref="missing_node")
-            ],
+            outputs=[PricingOutput(id="final_out", name="Final Output", source_ref="missing_node")],
         )
 
 
@@ -167,4 +163,3 @@ def test_nested_rule_condition_creation() -> None:
 
     assert rule.id == "surcharge_rule"
     assert isinstance(rule.condition, LogicalCondition)
-

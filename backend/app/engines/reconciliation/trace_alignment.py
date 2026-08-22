@@ -63,4 +63,3 @@ def align_and_compare_traces(
             )
 
     return differences
-

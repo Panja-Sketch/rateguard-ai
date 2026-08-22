@@ -8,7 +8,9 @@ from app.ipir.tables import ExactMatch, RangeMatch, RateTable, TableRow
 
 def _matches_exact(match: ExactMatch, input_val: Any) -> bool:
     """Checks exact equality match for string, integer, or boolean inputs."""
-    if isinstance(input_val, (int, float, Decimal)) and isinstance(match.value, (int, float, Decimal)):
+    if isinstance(input_val, (int, float, Decimal)) and isinstance(
+        match.value, (int, float, Decimal)
+    ):
         return Decimal(str(input_val)) == Decimal(str(match.value))
     return str(input_val).strip() == str(match.value).strip()
 

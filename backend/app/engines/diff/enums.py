@@ -29,4 +29,3 @@ class DifferenceSeverity(StrEnum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
-

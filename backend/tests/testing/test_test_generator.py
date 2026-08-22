@@ -57,4 +57,3 @@ def test_02_test_plan_generation_and_optimization() -> None:
     assert 20 in roof_values
     assert 21 in roof_values
     assert 30 in roof_values or 31 in roof_values
-

@@ -54,4 +54,3 @@ def test_03_create_assurance_run_invalid_package_rejected() -> None:
     )
     assert res.status_code == 400
     assert "Unsupported package_id" in res.json()["detail"]
-

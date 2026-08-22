@@ -52,4 +52,3 @@ def test_01_portfolio_analyzer_metrics_and_deduplication() -> None:
     assert res.total_absolute_variance > Decimal("0.00")
     assert isinstance(res.total_signed_variance, Decimal)
     assert len(res.issue_breakdown) > 0
-

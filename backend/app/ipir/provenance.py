@@ -36,4 +36,3 @@ class Provenance(BaseModel):
                 if val < Decimal("0") or val > Decimal("1"):
                     raise ValueError(f"{field_name} must be between 0 and 1 inclusive, got {val}")
         return self
-

@@ -35,4 +35,3 @@ class SemanticDiffResult(BaseModel):
     severity_counts: dict[str, int] = Field(default_factory=dict)
     semantically_equal: bool = True
     comparison_metadata: dict[str, Any] = Field(default_factory=dict)
-

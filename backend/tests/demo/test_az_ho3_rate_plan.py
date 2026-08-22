@@ -228,9 +228,7 @@ def test_sanity_protection_class_ranges_cover_1_to_10() -> None:
 def test_sanity_territories_all_20_present() -> None:
     pkg = load_canonical_package()
     table = next(t for t in pkg.tables if t.id == "territory_factor")
-    territories = [
-        r.matches[0].value for r in table.rows if isinstance(r.matches[0], ExactMatch)
-    ]
+    territories = [r.matches[0].value for r in table.rows if isinstance(r.matches[0], ExactMatch)]
     expected_territories = [f"T{i:02d}" for i in range(1, 21)]
     assert territories == expected_territories
 
@@ -252,4 +250,3 @@ def test_sanity_2d_table_60_combinations() -> None:
         combos.add((t_val, c_val))
 
     assert len(combos) == 60
-

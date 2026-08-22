@@ -72,6 +72,7 @@ class BaseRunStore(ABC):
     ) -> RunEvent:
         """Logs a structured workflow milestone event."""
         import uuid
+
         event = RunEvent(
             event_id=f"EVT-{uuid.uuid4().hex[:8].upper()}",
             run_id=run_id,

@@ -3,6 +3,7 @@ from enum import StrEnum
 
 class InsuranceLine(StrEnum):
     """Supported lines of business."""
+
     HOMEOWNERS = "HOMEOWNERS"
     PERSONAL_AUTO = "PERSONAL_AUTO"
     COMMERCIAL_AUTO = "COMMERCIAL_AUTO"
@@ -13,6 +14,7 @@ class InsuranceLine(StrEnum):
 
 class TransactionType(StrEnum):
     """Supported policy transaction contexts."""
+
     NEW_BUSINESS = "NEW_BUSINESS"
     RENEWAL = "RENEWAL"
     POLICY_CHANGE = "POLICY_CHANGE"
@@ -20,6 +22,7 @@ class TransactionType(StrEnum):
 
 class InputDataType(StrEnum):
     """Data types for risk and policy inputs."""
+
     INTEGER = "INTEGER"
     DECIMAL = "DECIMAL"
     MONEY = "MONEY"
@@ -31,12 +34,14 @@ class InputDataType(StrEnum):
 
 class TableLookupType(StrEnum):
     """Rate table lookup strategy."""
+
     EXACT = "EXACT"
     RANGE = "RANGE"
 
 
 class ModifierType(StrEnum):
     """Pricing modifier categories."""
+
     PERCENTAGE_DISCOUNT = "PERCENTAGE_DISCOUNT"
     PERCENTAGE_SURCHARGE = "PERCENTAGE_SURCHARGE"
     FLAT_DISCOUNT = "FLAT_DISCOUNT"
@@ -45,12 +50,14 @@ class ModifierType(StrEnum):
 
 class ConstraintType(StrEnum):
     """Premium constraint categories."""
+
     MINIMUM = "MINIMUM"
     MAXIMUM = "MAXIMUM"
 
 
 class RoundingMode(StrEnum):
     """Supported rounding algorithms."""
+
     HALF_UP = "HALF_UP"
     HALF_EVEN = "HALF_EVEN"
     FLOOR = "FLOOR"
@@ -59,6 +66,7 @@ class RoundingMode(StrEnum):
 
 class ExpressionOperator(StrEnum):
     """Supported mathematical calculation operators."""
+
     ADD = "ADD"
     SUBTRACT = "SUBTRACT"
     MULTIPLY = "MULTIPLY"
@@ -70,6 +78,7 @@ class ExpressionOperator(StrEnum):
 
 class ComparisonOperator(StrEnum):
     """Supported relational comparison operators."""
+
     EQ = "EQ"
     NE = "NE"
     GT = "GT"
@@ -80,12 +89,14 @@ class ComparisonOperator(StrEnum):
 
 class LogicalOperator(StrEnum):
     """Supported boolean logic operators."""
+
     AND = "AND"
     OR = "OR"
 
 
 class ProvenanceSourceType(StrEnum):
     """Categories of source materials for pricing logic lineage."""
+
     REGULATORY_FILING = "REGULATORY_FILING"
     ACTUARIAL_SPEC = "ACTUARIAL_SPEC"
     ACTUARIAL_WORKBOOK = "ACTUARIAL_WORKBOOK"
@@ -96,4 +107,3 @@ class ProvenanceSourceType(StrEnum):
     LEGACY_SYSTEM = "LEGACY_SYSTEM"
     MANUAL_ENTRY = "MANUAL_ENTRY"
     OTHER = "OTHER"
-

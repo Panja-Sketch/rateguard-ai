@@ -102,4 +102,3 @@ class IPIRPackage(BaseModel):
                 )
 
         return self
-

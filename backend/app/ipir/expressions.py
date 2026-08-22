@@ -15,14 +15,10 @@ class Expression(BaseModel):
         op_count = len(self.operands)
         if self.operator == ExpressionOperator.DIVIDE:
             if op_count != 2:
-                raise ValueError(
-                    f"DIVIDE operator requires exactly 2 operands, got {op_count}"
-                )
+                raise ValueError(f"DIVIDE operator requires exactly 2 operands, got {op_count}")
         elif self.operator == ExpressionOperator.ROUND:
             if op_count not in (1, 2):
-                raise ValueError(
-                    f"ROUND operator requires 1 or 2 operands, got {op_count}"
-                )
+                raise ValueError(f"ROUND operator requires 1 or 2 operands, got {op_count}")
         elif self.operator in (
             ExpressionOperator.ADD,
             ExpressionOperator.SUBTRACT,
@@ -38,4 +34,3 @@ class Expression(BaseModel):
 
 
 Expression.model_rebuild()
-

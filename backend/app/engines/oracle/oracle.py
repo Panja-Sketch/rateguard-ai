@@ -18,14 +18,14 @@ class PremiumOracle:
         strict_inputs: bool = False,
     ) -> OracleResult:
         """Calculates expected policy premium using exact Decimal arithmetic and returns full trace.
-        
+
         Args:
             package: Canonical IPIRPackage rate plan.
             risk: RiskInput instance containing rating variables.
             effective_date: Date for rate calculation.
             transaction_type: Policy transaction context.
             strict_inputs: If True, rejects unmodeled extra inputs.
-            
+
         Returns:
             OracleResult containing final premium, resolved context values, and step-by-step trace.
         """

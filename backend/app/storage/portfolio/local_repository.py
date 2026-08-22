@@ -136,4 +136,3 @@ class LocalPortfolioRepository(BasePortfolioRepository):
             claims_free_years=int(row.get("claims_free_years", 3)),
             canonical_premium=Decimal(str(row["canonical_premium"])),
         )
-

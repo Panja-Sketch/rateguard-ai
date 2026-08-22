@@ -63,4 +63,3 @@ def test_02_firestore_run_store_fallback_in_unit_test() -> None:
     fetched = store.get_run("RUN-FS-001")
     assert fetched is not None
     assert fetched.run_id == "RUN-FS-001"
-

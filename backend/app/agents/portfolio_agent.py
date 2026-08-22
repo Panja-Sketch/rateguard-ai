@@ -13,9 +13,7 @@ class PortfolioAgent:
     def __init__(self) -> None:
         self.config = get_agent_config()
 
-    def run(
-        self, csv_path: str, canonical_pkg_json: str, target_pkg_json: str
-    ) -> dict[str, Any]:
+    def run(self, csv_path: str, canonical_pkg_json: str, target_pkg_json: str) -> dict[str, Any]:
         """Executes deterministic portfolio analyzer tool and generates evidence summary."""
         # 1. Deterministic Tool Execution
         port_data = analyze_portfolio_exposure_tool(csv_path, canonical_pkg_json, target_pkg_json)
@@ -60,4 +58,3 @@ class PortfolioAgent:
             "summary": summary_text,
             "deterministic_data": port_data,
         }
-

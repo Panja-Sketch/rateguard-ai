@@ -53,4 +53,3 @@ class SemanticAssuranceAgent:
             "summary": summary_text,
             "deterministic_data": diff_data,
         }
-

@@ -37,9 +37,7 @@ class CoverageDefinition(BaseModel):
     @model_validator(mode="after")
     def validate_coverage(self) -> "CoverageDefinition":
         self.id = validate_identifier_string(self.id)
-        self.calculation_refs = [
-            validate_identifier_string(ref) for ref in self.calculation_refs
-        ]
+        self.calculation_refs = [validate_identifier_string(ref) for ref in self.calculation_refs]
         if self.output_ref is not None:
             self.output_ref = validate_identifier_string(self.output_ref)
         return self
@@ -59,4 +57,3 @@ class PricingOutput(BaseModel):
         self.id = validate_identifier_string(self.id)
         self.source_ref = validate_identifier_string(self.source_ref)
         return self
-

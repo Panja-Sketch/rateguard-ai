@@ -79,4 +79,3 @@ class RateTable(BaseModel):
                     f"does not match table dimension count ({dim_count})"
                 )
         return self
-

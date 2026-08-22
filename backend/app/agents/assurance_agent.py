@@ -78,8 +78,8 @@ class AssuranceDecisionAgent:
         portfolio_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Synthesizes subagent findings and enforces deterministic assurance decision policy."""
-        status, default_recommendation, blocking_reasons = (
-            evaluate_deterministic_assurance_policy(semantic_data, recon_data, portfolio_data)
+        status, default_recommendation, blocking_reasons = evaluate_deterministic_assurance_policy(
+            semantic_data, recon_data, portfolio_data
         )
 
         executive_summary = (
@@ -118,4 +118,3 @@ class AssuranceDecisionAgent:
             "recommendation": recommendation_text,
             "blocking_reasons": blocking_reasons,
         }
-

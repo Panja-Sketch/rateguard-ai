@@ -44,7 +44,7 @@ class AssuranceWorker:
             self.run_store.log_event(
                 run_id=run_id,
                 stage="COMPLETED",
-                message=f"Idempotency check: Job '{job.job_id}' received for already completed run.",
+                message=f"Idempotency check: Job '{job.job_id}' received for completed run.",
                 details={"job_id": job.job_id},
             )
             return {"status": "SKIPPED_ALREADY_COMPLETED", "run_id": run_id}
@@ -83,6 +83,7 @@ class AssuranceWorker:
                 canonical_pkg = res_left.ipir_package
             elif job.left_package_id:
                 from app.api.assurance import resolve_demo_package
+
                 canonical_pkg = resolve_demo_package(job.left_package_id)
 
             if job.right_source_id:
@@ -96,6 +97,7 @@ class AssuranceWorker:
                 defective_pkg = res_right.ipir_package
             elif job.right_package_id:
                 from app.api.assurance import resolve_demo_package
+
                 defective_pkg = resolve_demo_package(job.right_package_id)
 
             # 2. Log workflow progression stages

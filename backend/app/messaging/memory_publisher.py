@@ -14,4 +14,3 @@ class InMemoryPublisher(BaseMessagePublisher):
         msg_id = f"MSG-MEM-{uuid.uuid4().hex[:8].upper()}"
         self.published_jobs.append((msg_id, job))
         return msg_id
-

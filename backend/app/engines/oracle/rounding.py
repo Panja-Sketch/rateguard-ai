@@ -18,12 +18,12 @@ MODE_MAP = {
 
 def round_decimal(value: Decimal, precision: int, mode: RoundingMode) -> Decimal:
     """Rounds a Decimal value to the specified precision and mode using exact Decimal arithmetic.
-    
+
     Args:
         value: Input Decimal to round.
         precision: Number of decimal places (e.g. 2 for money, 4 for factors).
         mode: RoundingMode enum value.
-        
+
     Returns:
         Quantized Decimal value.
     """

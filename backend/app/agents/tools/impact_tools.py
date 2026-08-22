@@ -15,4 +15,3 @@ def analyze_pricing_impact_tool(
     impact = ImpactAnalyzer().analyze(diff_res, canonical_pkg)
 
     return impact.model_dump(mode="json")
-

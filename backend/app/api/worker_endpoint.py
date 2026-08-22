@@ -54,4 +54,3 @@ def process_pubsub_assurance_job(envelope: PubSubPushEnvelope) -> dict[str, Any]
         "run_id": job.run_id,
         "result": result,
     }
-

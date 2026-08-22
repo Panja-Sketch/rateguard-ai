@@ -54,4 +54,3 @@ def execute_pricing_assurance_tool(
             for rc in run.discovered_root_causes
         ],
     }
-

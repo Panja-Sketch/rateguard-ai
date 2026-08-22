@@ -60,4 +60,3 @@ class TestPlannerAgent:
             "summary": summary_text,
             "deterministic_data": test_data,
         }
-

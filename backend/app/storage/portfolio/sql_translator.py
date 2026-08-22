@@ -69,7 +69,9 @@ def translate_predicates_to_bigquery_where(
             if field not in ALLOWED_FIELDS:
                 continue
 
-            op_str = clause.operator.value if hasattr(clause.operator, "value") else str(clause.operator)
+            op_str = (
+                clause.operator.value if hasattr(clause.operator, "value") else str(clause.operator)
+            )
             sql_op = OPERATOR_MAP.get(op_str)
             if not sql_op:
                 continue
@@ -103,4 +105,3 @@ def translate_predicates_to_bigquery_where(
     # Combine distinct ImpactPredicates with OR
     where_sql = f"WHERE {' OR '.join(predicate_clauses)}"
     return ParameterizedFilter(where_clause=where_sql, query_params=params)
-

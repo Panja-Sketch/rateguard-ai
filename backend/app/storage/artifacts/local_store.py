@@ -48,9 +48,7 @@ class LocalArtifactStore(BaseArtifactStore):
     def exists(self, artifact_id: str) -> bool:
         return artifact_id in self._descriptors
 
-    def list_artifacts(
-        self, category: ArtifactCategory | None = None
-    ) -> list[ArtifactDescriptor]:
+    def list_artifacts(self, category: ArtifactCategory | None = None) -> list[ArtifactDescriptor]:
         if category is None:
             return list(self._descriptors.values())
         return [d for d in self._descriptors.values() if d.category == category]
@@ -63,4 +61,3 @@ class LocalArtifactStore(BaseArtifactStore):
                 p.unlink(missing_ok=True)
             return True
         return False
-

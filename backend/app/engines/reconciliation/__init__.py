@@ -23,4 +23,3 @@ __all__ = [
     "align_and_compare_traces",
     "perform_root_cause_analysis",
 ]
-

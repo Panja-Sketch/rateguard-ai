@@ -4,7 +4,7 @@ from app.adapters.models import SourceFormat
 
 
 class AdapterRegistry:
-    """Central registry mapping SourceFormat types to specialized PricingSourceAdapter implementations."""
+    """Central registry mapping SourceFormat to PricingSourceAdapter implementations."""
 
     def __init__(self) -> None:
         self._adapters: dict[SourceFormat, PricingSourceAdapter] = {}
@@ -25,4 +25,3 @@ _registry = AdapterRegistry()
 
 def get_adapter_registry() -> AdapterRegistry:
     return _registry
-

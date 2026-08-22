@@ -30,12 +30,14 @@ async def upload_pricing_source(file: UploadFile = File(...)) -> dict[str, Any]:
             "status": "REGISTERED",
         }
     except SourceParsingError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload pricing source: {e}",
-        )
+        ) from e
 
 
 @router.post("/{source_id}/compile")
@@ -64,5 +66,4 @@ def compile_pricing_source(source_id: str) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Source compilation failed: {e}",
-        )
-
+        ) from e

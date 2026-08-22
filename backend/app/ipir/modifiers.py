@@ -26,4 +26,3 @@ class PricingModifier(BaseModel):
         self.id = validate_identifier_string(self.id)
         self.applies_to = validate_identifier_string(self.applies_to)
         return self
-

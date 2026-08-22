@@ -7,7 +7,7 @@ from app.storage.artifacts import ArtifactCategory, ArtifactDescriptor, get_arti
 
 
 class PricingSourceIngestionService:
-    """Service orchestrating source upload, artifact storage, adapter compilation, and IPIR lineage."""
+    """Service orchestrating source upload, storage, compilation, and IPIR lineage."""
 
     def __init__(self) -> None:
         self.artifact_store = get_artifact_store()
@@ -35,7 +35,9 @@ class PricingSourceIngestionService:
             fmt = SourceFormat.PDF
             cat = ArtifactCategory.SOURCE_DOCUMENT
         else:
-            raise SourceParsingError(f"Unsupported file extension '.{ext}'. Allowed: .json, .xlsx, .pdf")
+            raise SourceParsingError(
+                f"Unsupported file extension '.{ext}'. Allowed: .json, .xlsx, .pdf"
+            )
 
         source_id = f"SRC-{uuid.uuid4().hex[:8].upper()}"
         art_desc = ArtifactDescriptor(
@@ -62,7 +64,9 @@ class PricingSourceIngestionService:
         """Selects adapter, compiles source bytes to IPIR, and saves compiled IPIR artifact."""
         content = self.artifact_store.get_artifact_content(source_descriptor.source_id)
         if not content:
-            raise SourceParsingError(f"Artifact content for source '{source_descriptor.source_id}' not found.")
+            raise SourceParsingError(
+                f"Artifact content for source '{source_descriptor.source_id}' not found."
+            )
 
         adapter = self.registry.get_adapter(source_descriptor.source_type)
         result = adapter.to_ipir(source_descriptor, content)
@@ -81,4 +85,3 @@ class PricingSourceIngestionService:
         self.artifact_store.save_artifact(ipir_art, ipir_json)
 
         return result
-

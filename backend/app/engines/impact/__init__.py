@@ -15,4 +15,3 @@ __all__ = [
     "PricingDependencyGraph",
     "derive_predicate_from_difference",
 ]
-

@@ -88,8 +88,7 @@ def perform_root_cause_analysis(
             else f"ISSUE_{primary_diff.node_id.upper()}"
         )
         explanation = (
-            f"Pricing mismatch originating at '{primary_node_id}'. "
-            f"{primary_diff.description}."
+            f"Pricing mismatch originating at '{primary_node_id}'. {primary_diff.description}."
         )
         exp_val = primary_diff.left_value
         act_val = primary_diff.right_value
@@ -98,9 +97,7 @@ def perform_root_cause_analysis(
         severity = DifferenceSeverity.HIGH
         sem_path = f"nodes.{primary_node_id}"
         group_id = None
-        first_td = next(
-            (td for td in trace_diffs if td.node_id == primary_node_id), trace_diffs[0]
-        )
+        first_td = next((td for td in trace_diffs if td.node_id == primary_node_id), trace_diffs[0])
         explanation = (
             f"Calculation divergence detected at node '{primary_node_id}'. "
             f"Expected: {first_td.expected_value}, Actual: {first_td.actual_value}."

@@ -22,4 +22,3 @@ def compare_ipir_packages_tool(left_package_json: str, right_package_json: str) 
     }
 
     return data
-

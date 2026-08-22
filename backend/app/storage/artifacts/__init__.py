@@ -30,4 +30,3 @@ __all__ = [
     "LocalArtifactStore",
     "get_artifact_store",
 ]
-

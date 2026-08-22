@@ -272,9 +272,7 @@ def evaluate_package(
     ]
     active_constraints.sort(key=lambda c: c.sequence if c.sequence is not None else 0)
 
-    active_fees = [
-        f for f in package.fees if is_active(f.effective_period, effective_date)
-    ]
+    active_fees = [f for f in package.fees if is_active(f.effective_period, effective_date)]
     active_fees.sort(key=lambda f: f.sequence if f.sequence is not None else 0)
 
     # 7. Execute Calculation Nodes in Topological Order
@@ -300,7 +298,8 @@ def evaluate_package(
 
         # Apply active modifiers declared in this calculation node's depends_on list
         mod_matches = [
-            m for m in active_modifiers
+            m
+            for m in active_modifiers
             if m.id in node.depends_on and m.id not in processed_modifiers
         ]
         for mod in mod_matches:
@@ -347,7 +346,8 @@ def evaluate_package(
 
         # Apply active constraints declared in this node's depends_on list
         con_matches = [
-            c for c in active_constraints
+            c
+            for c in active_constraints
             if c.id in node.depends_on and c.id not in processed_constraints
         ]
         for con in con_matches:
@@ -374,8 +374,7 @@ def evaluate_package(
 
         # Apply active fees declared in this node's depends_on list
         fee_matches = [
-            f for f in active_fees
-            if f.id in node.depends_on and f.id not in processed_fees
+            f for f in active_fees if f.id in node.depends_on and f.id not in processed_fees
         ]
         for fee in fee_matches:
             processed_fees.add(fee.id)

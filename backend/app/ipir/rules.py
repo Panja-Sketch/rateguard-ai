@@ -47,4 +47,3 @@ class PricingRule(BaseModel):
     def validate_rule(self) -> "PricingRule":
         self.id = validate_identifier_string(self.id)
         return self
-

@@ -62,4 +62,3 @@ def test_02_agentic_assurance_identical_package_pass() -> None:
 
     assert result.status == "PASS"
     assert "PASS" in result.recommendation
-

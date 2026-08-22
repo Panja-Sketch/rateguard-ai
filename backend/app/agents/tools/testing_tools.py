@@ -37,4 +37,3 @@ def generate_assurance_test_plan_tool(
             for sc in test_plan.selected_scenarios
         ],
     }
-

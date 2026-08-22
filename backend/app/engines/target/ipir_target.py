@@ -57,4 +57,3 @@ class IPIRRatingTarget(RatingTarget):
             status="SUCCESS",
             metadata={"target_engine_type": "IPIRRatingTarget"},
         )
-

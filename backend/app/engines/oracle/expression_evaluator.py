@@ -16,20 +16,18 @@ def _to_decimal(val: Any) -> Decimal:
     try:
         return Decimal(str(val))
     except (InvalidOperation, TypeError, ValueError) as e:
-        raise ExpressionEvaluationError(
-            f"Cannot convert operand '{val}' to Decimal: {e}"
-        ) from e
+        raise ExpressionEvaluationError(f"Cannot convert operand '{val}' to Decimal: {e}") from e
 
 
 def evaluate_expression(
     expression: Expression | NodeReference | LiteralValue, context: dict[str, Any]
 ) -> Decimal | int | str | bool:
     """Recursively evaluates an AST expression node using exact Decimal arithmetic.
-    
+
     Args:
         expression: Target Expression, NodeReference, or LiteralValue.
         context: Current evaluation context.
-        
+
     Returns:
         Evaluated value (Decimal for numeric calculations).
     """
@@ -43,9 +41,7 @@ def evaluate_expression(
         raise ExpressionEvaluationError(f"Invalid expression AST node: {type(expression)}")
 
     op = expression.operator
-    eval_operands = [
-        evaluate_expression(operand, context) for operand in expression.operands
-    ]
+    eval_operands = [evaluate_expression(operand, context) for operand in expression.operands]
 
     if op == ExpressionOperator.ADD:
         dec_operands = [_to_decimal(v) for v in eval_operands]

@@ -117,7 +117,9 @@ class BigQueryPortfolioRepository(BasePortfolioRepository):
         roof_21_30 = row.get("roof_21_30", 0)
 
         # Territory count aggregation
-        terr_query = f"SELECT territory, COUNT(1) as cnt FROM {self._portfolio_fqn} GROUP BY territory"
+        terr_query = (
+            f"SELECT territory, COUNT(1) as cnt FROM {self._portfolio_fqn} GROUP BY territory"
+        )
         terr_job = self.client.query(terr_query)
         terr_counts = {r["territory"]: r["cnt"] for r in terr_job.result()}
 
@@ -151,4 +153,3 @@ class BigQueryPortfolioRepository(BasePortfolioRepository):
             claims_free_years=int(r.get("claims_free_years", 3)),
             canonical_premium=Decimal(str(r["canonical_premium"])),
         )
-

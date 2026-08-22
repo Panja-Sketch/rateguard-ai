@@ -141,7 +141,7 @@ def test_scenario_d_minimum_premium_activated() -> None:
     risk = RiskInput(
         values={
             "territory": "T01",  # 0.88
-            "roof_age": 2,       # 0.90
+            "roof_age": 2,  # 0.90
             "deductible": 5000,  # 0.72
             "protection_class": 1,  # 0.92
             "construction_type": "SUPERIOR",  # 0.88

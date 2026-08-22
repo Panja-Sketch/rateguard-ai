@@ -19,4 +19,3 @@ class PricingSourceAdapter(ABC):
     ) -> AdapterResult:
         """Compiles raw source bytes into a canonical IPIRPackage with mapping metadata."""
         pass
-

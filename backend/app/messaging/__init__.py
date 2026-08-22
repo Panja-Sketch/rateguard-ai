@@ -22,4 +22,3 @@ __all__ = [
     "AssuranceWorker",
     "get_message_publisher",
 ]
-

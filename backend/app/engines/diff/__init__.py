@@ -13,4 +13,3 @@ __all__ = [
     "compare_packages",
     "compare_rate_tables",
 ]
-

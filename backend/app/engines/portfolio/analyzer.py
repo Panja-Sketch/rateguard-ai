@@ -141,8 +141,12 @@ class PortfolioAnalyzer:
                 total_target_premium=st["target_prem"],
                 signed_variance=st["signed_var"],
                 absolute_variance=st["abs_var"],
-                exposed_policy_pct=round((st["exposed_count"] / total_policies * 100.0) if total_policies else 0.0, 2),
-                affected_policy_pct=round((st["financial_count"] / total_policies * 100.0) if total_policies else 0.0, 2),
+                exposed_policy_pct=round(
+                    (st["exposed_count"] / total_policies * 100.0) if total_policies else 0.0, 2
+                ),
+                affected_policy_pct=round(
+                    (st["financial_count"] / total_policies * 100.0) if total_policies else 0.0, 2
+                ),
             )
             for p_id, st in issue_stats.items()
         ]

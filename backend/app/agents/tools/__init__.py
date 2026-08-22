@@ -11,4 +11,3 @@ __all__ = [
     "execute_pricing_assurance_tool",
     "generate_assurance_test_plan_tool",
 ]
-

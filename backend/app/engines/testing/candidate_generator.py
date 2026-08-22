@@ -116,13 +116,18 @@ def generate_candidate_scenarios(
                         target_difference_ids=t_diff_ids,
                         target_node_ids=t_node_ids,
                         tags=[tag_label, f"VAL_{b_val}"],
-                        purpose=f"Test predicate boundary for {field_name} at boundary value {b_val} ({label}).",
+                        purpose=(
+                            f"Test predicate boundary for {field_name} at "
+                            f"value {b_val} ({label})."
+                        ),
                     )
                 )
 
     # 3. Temporal Effective Date Shift Scenarios
     date_diffs = [
-        d for d in diff_result.differences if d.difference_type == DifferenceType.EFFECTIVE_DATE_CHANGE
+        d
+        for d in diff_result.differences
+        if d.difference_type == DifferenceType.EFFECTIVE_DATE_CHANGE
     ]
     for diff in date_diffs:
         target_start = None
@@ -146,7 +151,10 @@ def generate_candidate_scenarios(
                     target_difference_ids=[diff.id],
                     target_node_ids=[diff.node_id],
                     tags=["TEMPORAL", "PRE_WINDOW"],
-                    purpose=f"Verify pricing behavior prior to delayed effective date {target_start}.",
+                    purpose=(
+                        f"Verify pricing behavior prior to delayed "
+                        f"effective date {target_start}."
+                    ),
                 )
             )
             counter += 1

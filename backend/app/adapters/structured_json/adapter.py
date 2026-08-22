@@ -48,4 +48,3 @@ class StructuredJSONPricingAdapter(PricingSourceAdapter):
             provenance=prov,
             requires_human_review=False,
         )
-

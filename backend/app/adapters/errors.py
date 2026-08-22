@@ -14,4 +14,3 @@ class MappingCompletenessError(AdapterError):
     """Raised when critical required pricing fields cannot be mapped."""
 
     pass
-

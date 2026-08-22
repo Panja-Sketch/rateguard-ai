@@ -30,4 +30,3 @@ class AgenticAssuranceResult(BaseModel):
     agent_steps: list[AgentStepLog] = Field(default_factory=list)
     confidence: float = 1.0
     limitations: list[str] = Field(default_factory=list)
-

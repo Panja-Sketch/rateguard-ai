@@ -10,7 +10,10 @@ from app.ipir.provenance import Provenance, SourceReference
 
 
 class PlatformConfigAdapter(PricingSourceAdapter):
-    """Adapter compiling synthetic rating platform configuration representations into IPIR packages."""
+    """
+    Adapter compiling synthetic rating platform configuration
+    into IPIR packages.
+    """
 
     adapter_id = "platform_config_adapter"
     supported_format = "PLATFORM_CONFIG"
@@ -60,4 +63,3 @@ class PlatformConfigAdapter(PricingSourceAdapter):
             provenance=prov,
             requires_human_review=False,
         )
-

@@ -22,4 +22,3 @@ class TargetQuoteResult(BaseModel):
     trace: PremiumTrace
     status: str = "SUCCESS"
     metadata: dict[str, Any] = Field(default_factory=dict)
-

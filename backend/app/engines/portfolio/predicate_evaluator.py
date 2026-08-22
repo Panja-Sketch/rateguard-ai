@@ -44,4 +44,3 @@ def matches_predicate(policy: SyntheticPolicy, predicate: ImpactPredicate) -> bo
                 return False
 
     return True
-

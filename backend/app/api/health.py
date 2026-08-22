@@ -7,4 +7,3 @@ router = APIRouter(tags=["Health"])
 async def health_check() -> dict[str, str]:
     """Endpoint verifying service health status."""
     return {"status": "healthy"}
-

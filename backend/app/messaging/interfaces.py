@@ -10,4 +10,3 @@ class BaseMessagePublisher(ABC):
     def publish_assurance_job(self, job: AssuranceJob) -> str:
         """Publishes an assurance job message and returns the unique published message ID."""
         pass
-

@@ -99,9 +99,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 col_ref = (
-                    self._db.collection("assurance_runs")
-                    .document(run_id)
-                    .collection("events")
+                    self._db.collection("assurance_runs").document(run_id).collection("events")
                 )
                 docs = col_ref.stream()
                 events = [RunEvent.model_validate(doc.to_dict()) for doc in docs]
@@ -134,9 +132,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 col_ref = (
-                    self._db.collection("assurance_runs")
-                    .document(run_id)
-                    .collection("evidence")
+                    self._db.collection("assurance_runs").document(run_id).collection("evidence")
                 )
                 docs = col_ref.stream()
                 evidence_list = [EvidenceRecord.model_validate(doc.to_dict()) for doc in docs]
@@ -147,4 +143,3 @@ class FirestoreRunStore(BaseRunStore):
                 if not self.fallback_on_error:
                     raise
         return self._fallback_store.get_evidence(run_id)
-
