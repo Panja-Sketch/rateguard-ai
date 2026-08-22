@@ -32,8 +32,10 @@ class RootCauseFinding(BaseModel):
     semantic_path: str
     difference_type: DifferenceType
     severity: DifferenceSeverity
+    semantic_issue_group_id: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
     downstream_effects: list[str] = Field(default_factory=list)
+    contributing_root_causes: list[str] = Field(default_factory=list)
 
 
 class PremiumReconciliationResult(BaseModel):
@@ -46,9 +48,11 @@ class PremiumReconciliationResult(BaseModel):
     absolute_variance: Decimal
     percentage_variance: Decimal
     premium_matches: bool
+    trace_diverged: bool = False
     trace_differences: list[TraceDifference] = Field(default_factory=list)
     first_divergent_node: str | None = None
     root_cause: RootCauseFinding | None = None
+    contributing_root_causes: list[RootCauseFinding] = Field(default_factory=list)
     related_semantic_difference_ids: list[str] = Field(default_factory=list)
     status: str  # "MATCH" or "MISMATCH"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -65,8 +69,8 @@ class PricingAssuranceRun(BaseModel):
     mismatch_count: int
     candidate_reduction_pct: float
     semantic_difference_coverage_pct: float
-    defect_reproduction_rate_pct: float
+    behavioral_difference_coverage_pct: float
+    premium_difference_reproduction_rate_pct: float
     discovered_root_causes: list[RootCauseFinding] = Field(default_factory=list)
     overall_status: str  # "PASS", "REVIEW", or "FAIL"
     run_metadata: dict[str, Any] = Field(default_factory=dict)
-

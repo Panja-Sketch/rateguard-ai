@@ -9,7 +9,7 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.ipir.common import EffectivePeriod  # noqa: E402
+from app.ipir.common import EffectivePeriod, NodeReference  # noqa: E402
 from app.ipir.enums import ProvenanceSourceType  # noqa: E402
 from app.ipir.package import IPIRPackage  # noqa: E402
 from app.ipir.provenance import Provenance, SourceReference  # noqa: E402
@@ -46,6 +46,18 @@ def build_defective_package() -> IPIRPackage:
     policy_fee = next(f for f in pkg.fees if f.id == "policy_fee")
     policy_min.sequence = 4
     policy_fee.sequence = 3
+
+    calc_min = next(n for n in pkg.calculations if n.id == "premium_after_minimum")
+    calc_total = next(n for n in pkg.calculations if n.id == "total_policy_premium")
+
+    # Swapped order: policy_fee (seq 3) applies to premium_after_discounts in calc_min node.
+    # policy_minimum (seq 4) applies to total_policy_premium node.
+    policy_fee.applies_to = "premium_after_discounts"
+    policy_min.applies_to = "premium_after_minimum"
+
+    calc_min.depends_on = ["premium_after_discounts", "policy_fee"]
+    calc_total.expression = NodeReference(ref="premium_after_minimum")
+    calc_total.depends_on = ["premium_after_minimum", "policy_minimum"]
 
     # Defective Provenance
     pkg.provenance = Provenance(
@@ -134,4 +146,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

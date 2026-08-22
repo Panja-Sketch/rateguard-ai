@@ -34,7 +34,7 @@ def main() -> None:
     run = runner.run_assurance(canonical_pkg, defective_pkg)
 
     print("\n========================================================")
-    print("           RateGuard End-to-End Pricing Assurance       ")
+    print("           RateGuard Hardened Pricing Assurance         ")
     print("========================================================\n")
     print(f"Canonical Rate Plan: {run.test_plan.package_id}")
     print(f"Target Rating Engine: {run.test_plan.compared_package_ids[1]}")
@@ -64,14 +64,14 @@ def main() -> None:
 
     print("Assurance Run Metrics & Coverage Summary")
     print("--------------------------------------------------------")
-    print(f"  Control Scenarios Passed (Match):   {run.passed_count}")
-    print(f"  Defect Scenarios Failed (Mismatch): {run.failed_count}")
-    print(f"  Semantic Difference Coverage:       {run.semantic_difference_coverage_pct}%")
-    print(f"  Defect Reproduction Rate:           {run.defect_reproduction_rate_pct}%")
-    print(f"  Unique Root Causes Discovered:      {len(run.discovered_root_causes)}")
+    print(f"  Control Scenarios Passed (Match):    {run.passed_count}")
+    print(f"  Defect Scenarios Failed (Mismatch):  {run.failed_count}")
+    print(f"  Semantic Difference Coverage:        {run.semantic_difference_coverage_pct}%")
+    print(f"  Behavioral Difference Coverage:      {run.behavioral_difference_coverage_pct}%")
+    print(f"  Premium Reproduction Rate:           {run.premium_difference_reproduction_rate_pct}%")
+    print(f"  Unique Root Causes Discovered:       {len(run.discovered_root_causes)}")
     print("========================================================\n")
 
 
 if __name__ == "__main__":
     main()
-

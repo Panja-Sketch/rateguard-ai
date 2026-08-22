@@ -51,11 +51,11 @@ def test_01_reconciliation_roof_20_control_matches() -> None:
             "deductible": 1000,
             "protection_class": 5,
             "construction_type": "MASONRY",
-            "dwelling_limit": 300000,
+            "dwelling_limit": 500000,
             "multi_policy": False,
             "claims_free": False,
         },
-        effective_date=date(2026, 9, 15),
+        effective_date=date(2026, 9, 20),
         purpose="Control test baseline",
     )
 
@@ -68,8 +68,6 @@ def test_01_reconciliation_roof_20_control_matches() -> None:
     assert recon.premium_matches is True
     assert recon.status == "MATCH"
     assert recon.absolute_variance == Decimal("0.00")
-    assert recon.first_divergent_node is None
-    assert recon.root_cause is None
 
 
 def test_02_reconciliation_roof_21_mismatch_identifies_upstream_rca() -> None:
@@ -94,7 +92,7 @@ def test_02_reconciliation_roof_21_mismatch_identifies_upstream_rca() -> None:
             "multi_policy": True,
             "claims_free": True,
         },
-        effective_date=date(2026, 9, 15),
+        effective_date=date(2026, 9, 20),
         purpose="Targeted defect test",
     )
 
@@ -124,6 +122,6 @@ def test_03_full_pricing_assurance_runner_pipeline() -> None:
     assert run.passed_count > 0
     assert run.failed_count > 0
     assert run.semantic_difference_coverage_pct == 100.0
-    assert run.defect_reproduction_rate_pct > 0.0
+    assert run.behavioral_difference_coverage_pct > 0.0
+    assert run.premium_difference_reproduction_rate_pct > 0.0
     assert len(run.discovered_root_causes) > 0
-

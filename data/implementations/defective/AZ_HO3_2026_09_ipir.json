@@ -1399,7 +1399,7 @@
       },
       "depends_on": [
         "premium_after_discounts",
-        "policy_minimum"
+        "policy_fee"
       ],
       "rounding_rule_ref": "premium_rounding",
       "effective_period": null,
@@ -1410,19 +1410,11 @@
       "id": "total_policy_premium",
       "name": "Total Policy Premium",
       "expression": {
-        "operator": "ADD",
-        "operands": [
-          {
-            "ref": "premium_after_minimum"
-          },
-          {
-            "ref": "policy_fee"
-          }
-        ]
+        "ref": "premium_after_minimum"
       },
       "depends_on": [
         "premium_after_minimum",
-        "policy_fee"
+        "policy_minimum"
       ],
       "rounding_rule_ref": "premium_rounding",
       "effective_period": null,
@@ -1494,7 +1486,7 @@
       "name": "Minimum Policy Premium Constraint",
       "constraint_type": "MINIMUM",
       "amount": "575.00",
-      "applies_to": "premium_after_discounts",
+      "applies_to": "premium_after_minimum",
       "sequence": 4,
       "effective_period": {
         "start": "2026-09-01",
@@ -1508,7 +1500,7 @@
       "id": "policy_fee",
       "name": "Policy Fee",
       "amount": "25.00",
-      "applies_to": "premium_after_minimum",
+      "applies_to": "premium_after_discounts",
       "sequence": 3,
       "effective_period": {
         "start": "2026-09-01",

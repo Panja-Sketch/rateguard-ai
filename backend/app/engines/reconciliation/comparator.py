@@ -31,7 +31,9 @@ class ReconciliationEngine:
         premium_matches = (exp_prem == act_prem)
 
         trace_diffs = align_and_compare_traces(expected.trace, actual.trace, package)
-        first_divergent, root_cause = perform_root_cause_analysis(
+        trace_diverged = len(trace_diffs) > 0
+
+        first_divergent, root_cause, contributing = perform_root_cause_analysis(
             trace_diffs, diff_result, package
         )
 
@@ -45,11 +47,12 @@ class ReconciliationEngine:
             absolute_variance=abs_var,
             percentage_variance=round(pct_var, 4),
             premium_matches=premium_matches,
+            trace_diverged=trace_diverged,
             trace_differences=trace_diffs,
             first_divergent_node=first_divergent,
             root_cause=root_cause,
+            contributing_root_causes=contributing,
             related_semantic_difference_ids=related_diff_ids,
             status="MATCH" if premium_matches else "MISMATCH",
             metadata={"currency": expected.currency},
         )
-

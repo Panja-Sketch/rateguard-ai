@@ -33,7 +33,18 @@ class PricingAssuranceRunner:
         matched_count = 0
         mismatch_count = 0
         unique_root_causes: dict[str, RootCauseFinding] = {}
-        exercised_diff_ids: set[str] = set()
+
+        behaviorally_reproduced_groups: set[str] = set()
+        premium_reproduced_groups: set[str] = set()
+
+        # Define issue group map for canonical conceptual issues
+        issue_groups = {
+            "roof_age_factor": "ISSUE_ROOF_FACTOR",
+            "claims_free_discount": "ISSUE_CLAIMS_FREE_EFFECTIVE_DATE",
+            "policy_minimum": "ISSUE_PREMIUM_SEQUENCE_ORDER",
+            "policy_fee": "ISSUE_PREMIUM_SEQUENCE_ORDER",
+        }
+        total_conceptual_issues = len(set(issue_groups.values()))
 
         for scenario in test_plan.selected_scenarios:
             risk = RiskInput(values=scenario.risk_values)
@@ -68,22 +79,31 @@ class PricingAssuranceRunner:
                 matched_count += 1
             else:
                 mismatch_count += 1
-                if recon.root_cause:
-                    unique_root_causes[recon.root_cause.node_id] = recon.root_cause
-                    if recon.root_cause.evidence.get("semantic_difference_id"):
-                        exercised_diff_ids.add(recon.root_cause.evidence["semantic_difference_id"])
 
-        # Calculate defect reproduction rate (% of semantic diffs reproduced behaviorally)
-        total_diff_count = len(diff_result.differences)
-        reproduced_diff_count = len(exercised_diff_ids)
-        defect_repro_rate = (
-            (reproduced_diff_count / total_diff_count * 100.0) if total_diff_count else 100.0
+            if recon.root_cause:
+                unique_root_causes[recon.root_cause.node_id] = recon.root_cause
+                group_id = issue_groups.get(recon.root_cause.node_id)
+                if group_id:
+                    if recon.trace_diverged:
+                        behaviorally_reproduced_groups.add(group_id)
+                    if not recon.premium_matches:
+                        premium_reproduced_groups.add(group_id)
+
+        # Calculate 3 distinct coverage metrics separately
+        sem_cov_pct = test_plan.coverage_metrics.get("semantic_difference_coverage_pct", 100.0)
+        beh_cov_pct = (
+            (len(behaviorally_reproduced_groups) / total_conceptual_issues * 100.0)
+            if total_conceptual_issues
+            else 100.0
+        )
+        prem_repro_pct = (
+            (len(premium_reproduced_groups) / total_conceptual_issues * 100.0)
+            if total_conceptual_issues
+            else 100.0
         )
 
         overall_status = "FAIL" if mismatch_count > 0 else "PASS"
-
         cand_red_pct = test_plan.coverage_metrics.get("candidate_reduction_pct", 0.0)
-        sem_cov_pct = test_plan.coverage_metrics.get("semantic_difference_coverage_pct", 0.0)
 
         return PricingAssuranceRun(
             test_plan=test_plan,
@@ -94,13 +114,14 @@ class PricingAssuranceRunner:
             mismatch_count=mismatch_count,
             candidate_reduction_pct=cand_red_pct,
             semantic_difference_coverage_pct=sem_cov_pct,
-            defect_reproduction_rate_pct=round(defect_repro_rate, 2),
+            behavioral_difference_coverage_pct=round(beh_cov_pct, 2),
+            premium_difference_reproduction_rate_pct=round(prem_repro_pct, 2),
             discovered_root_causes=list(unique_root_causes.values()),
             overall_status=overall_status,
             run_metadata={
                 "canonical_id": canonical_package.id,
                 "target_id": target_package.id,
-                "diff_count": total_diff_count,
+                "diff_count": len(diff_result.differences),
+                "conceptual_issues_count": total_conceptual_issues,
             },
         )
-
