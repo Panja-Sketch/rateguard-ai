@@ -1,8 +1,8 @@
 {
   "ipir_version": "0.1",
-  "id": "AZ_HO3_2026_09",
-  "name": "Arizona Homeowners HO3 Synthetic Rate Plan",
-  "version": "2026.09",
+  "id": "AZ_HO3_2026_09_DEFECTIVE",
+  "name": "Arizona Homeowners HO3 Synthetic Defective Implementation Rate Plan",
+  "version": "2026.09-defective",
   "product": {
     "id": "AZ_HO3",
     "name": "Arizona Homeowners HO3 Product",
@@ -397,7 +397,7 @@
               "include_maximum": true
             }
           ],
-          "value": "1.35"
+          "value": "1.25"
         },
         {
           "matches": [
@@ -1482,7 +1482,7 @@
       },
       "sequence": 2,
       "effective_period": {
-        "start": "2026-09-01",
+        "start": "2026-09-15",
         "end": null
       },
       "provenance": null
@@ -1495,7 +1495,7 @@
       "constraint_type": "MINIMUM",
       "amount": "575.00",
       "applies_to": "premium_after_discounts",
-      "sequence": 3,
+      "sequence": 4,
       "effective_period": {
         "start": "2026-09-01",
         "end": null
@@ -1509,7 +1509,7 @@
       "name": "Policy Fee",
       "amount": "25.00",
       "applies_to": "premium_after_minimum",
-      "sequence": 4,
+      "sequence": 3,
       "effective_period": {
         "start": "2026-09-01",
         "end": null
@@ -1540,10 +1540,10 @@
   "provenance": {
     "sources": [
       {
-        "source_type": "ACTUARIAL_SPEC",
-        "source_id": "synthetic-az-ho3-2026-09",
-        "source_name": "Synthetic Arizona HO3 Rate Specification",
-        "source_version": "2026.09",
+        "source_type": "RATING_ENGINE",
+        "source_id": "synthetic-rating-engine-implementation",
+        "source_name": "Synthetic Rating Engine Implementation",
+        "source_version": "2026.09-defective",
         "location": null,
         "page": null,
         "section": null,
@@ -1552,6 +1552,6 @@
     ],
     "extraction_confidence": "1.0",
     "interpretation_confidence": "1.0",
-    "notes": "Synthetic hackathon dataset; not a real insurer's rate filing; intended as canonical pricing intent for RateGuard demonstration."
+    "notes": "Synthetic hackathon defective implementation package; intentionally contains controlled pricing defects for RateGuard assurance testing."
   }
 }

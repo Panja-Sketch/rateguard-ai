@@ -276,6 +276,7 @@ def build_canonical_package() -> IPIRPackage:
             name="Multi-Policy Discount",
             modifier_type=ModifierType.PERCENTAGE_DISCOUNT,
             applies_to="gross_risk_premium",
+            effective_period=effective_period,
             value=Decimal("0.12"),
             eligibility=ComparisonCondition(
                 left=NodeReference(ref="multi_policy"),
@@ -289,6 +290,7 @@ def build_canonical_package() -> IPIRPackage:
             name="Claims-Free Discount",
             modifier_type=ModifierType.PERCENTAGE_DISCOUNT,
             applies_to="gross_risk_premium",
+            effective_period=effective_period,
             value=Decimal("0.05"),
             eligibility=ComparisonCondition(
                 left=NodeReference(ref="claims_free"),
@@ -307,6 +309,7 @@ def build_canonical_package() -> IPIRPackage:
             constraint_type=ConstraintType.MINIMUM,
             amount=Decimal("575.00"),
             applies_to="premium_after_discounts",
+            effective_period=effective_period,
             sequence=3,
         )
     ]
@@ -316,6 +319,7 @@ def build_canonical_package() -> IPIRPackage:
             name="Policy Fee",
             amount=Decimal("25.00"),
             applies_to="premium_after_minimum",
+            effective_period=effective_period,
             sequence=4,
         )
     ]
@@ -493,4 +497,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
