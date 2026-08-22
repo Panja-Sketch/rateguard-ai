@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -86,7 +86,7 @@ class BigQueryPortfolioRepository(BasePortfolioRepository):
     ) -> bool:
         row = {
             "run_id": run_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "total_policies": result.total_policies,
             "exposed_policies": result.exposed_policy_count,
             "behaviorally_affected": result.behaviorally_affected_count,

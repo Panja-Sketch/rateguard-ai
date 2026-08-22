@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
 from app.engines.impact.models import ImpactPredicate
 from app.engines.portfolio.models import PortfolioExposureResult

@@ -1,8 +1,6 @@
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
-from app.adapters import get_adapter_registry
 from app.agents.runner import AgenticAssuranceRunner
 from app.ipir.package import IPIRPackage
 from app.messaging.models import AssuranceJob

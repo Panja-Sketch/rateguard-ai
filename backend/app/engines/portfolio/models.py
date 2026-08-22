@@ -53,12 +53,37 @@ class PortfolioExposureResult(BaseModel):
     exposed_policy_count: int
     exposed_policy_pct: float
     behaviorally_affected_count: int = 0
+    behaviorally_affected_pct: float = 0.0
     financially_affected_count: int
     financially_affected_pct: float
     total_expected_premium: Decimal
     total_target_premium: Decimal
     total_signed_variance: Decimal
     total_absolute_variance: Decimal
+    undercharged_policy_count: int = 0
+    total_undercharge_amount: Decimal = Decimal("0.00")
+    overcharged_policy_count: int = 0
+    total_overcharge_amount: Decimal = Decimal("0.00")
+    average_variance_per_affected_policy: Decimal = Decimal("0.00")
+    max_single_policy_variance: Decimal = Decimal("0.00")
+    multi_defect_policy_count: int = 0
     defect_exposures: list[DefectExposure] = Field(default_factory=list)
     issue_breakdown: list[DefectExposure] = Field(default_factory=list)
+    performance_telemetry: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def undercharged_count(self) -> int:
+        return self.undercharged_policy_count
+
+    @property
+    def total_undercharge(self) -> Decimal:
+        return self.total_undercharge_amount
+
+    @property
+    def overcharged_count(self) -> int:
+        return self.overcharged_policy_count
+
+    @property
+    def total_overcharge(self) -> Decimal:
+        return self.total_overcharge_amount

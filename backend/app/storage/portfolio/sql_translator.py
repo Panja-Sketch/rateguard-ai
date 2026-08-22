@@ -1,7 +1,6 @@
 from typing import Any, NamedTuple
 
 from app.engines.impact.models import ImpactPredicate
-from app.ipir.enums import ComparisonOperator
 
 # Supported SQL-safe field mapping
 ALLOWED_FIELDS: dict[str, str] = {

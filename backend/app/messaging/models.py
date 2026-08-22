@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -9,7 +9,7 @@ class AssuranceJob(BaseModel):
 
     job_id: str
     run_id: str
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     left_source_id: str | None = None
     right_source_id: str | None = None
     left_package_id: str | None = None
