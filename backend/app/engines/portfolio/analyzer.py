@@ -141,6 +141,8 @@ class PortfolioAnalyzer:
                 total_target_premium=st["target_prem"],
                 signed_variance=st["signed_var"],
                 absolute_variance=st["abs_var"],
+                exposed_policy_pct=round((st["exposed_count"] / total_policies * 100.0) if total_policies else 0.0, 2),
+                affected_policy_pct=round((st["financial_count"] / total_policies * 100.0) if total_policies else 0.0, 2),
             )
             for p_id, st in issue_stats.items()
         ]
@@ -168,6 +170,7 @@ class PortfolioAnalyzer:
             average_variance_per_affected_policy=avg_var,
             max_single_policy_variance=max_single_var,
             multi_defect_policy_count=multi_defect_count,
+            defect_exposures=issue_breakdown,
             issue_breakdown=issue_breakdown,
             performance_telemetry={
                 "elapsed_seconds": round(elapsed_sec, 3),
@@ -175,4 +178,3 @@ class PortfolioAnalyzer:
                 "policies_repriced": repriced_count,
             },
         )
-

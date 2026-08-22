@@ -24,6 +24,7 @@ class SyntheticPolicy(BaseModel):
     dwelling_limit: int
     multi_policy: bool
     claims_free: bool
+    claims_free_years: int = 3
     canonical_premium: Decimal
     target_premium: Decimal | None = None
 
@@ -40,30 +41,24 @@ class DefectExposure(BaseModel):
     total_target_premium: Decimal
     signed_variance: Decimal
     absolute_variance: Decimal
+    exposed_policy_pct: float
+    affected_policy_pct: float
 
 
 class PortfolioExposureResult(BaseModel):
-    """Aggregated portfolio-level financial exposure and blast radius summary."""
+    """Summary of 50,000 policy portfolio blast radius and financial exposure."""
 
-    portfolio_id: str
+    portfolio_id: str = "AZ_HO3_2026_SYNTHETIC_50K"
     total_policies: int
     exposed_policy_count: int
     exposed_policy_pct: float
-    behaviorally_affected_count: int
-    behaviorally_affected_pct: float
+    behaviorally_affected_count: int = 0
     financially_affected_count: int
     financially_affected_pct: float
     total_expected_premium: Decimal
     total_target_premium: Decimal
     total_signed_variance: Decimal
     total_absolute_variance: Decimal
-    undercharged_policy_count: int
-    total_undercharge_amount: Decimal
-    overcharged_policy_count: int
-    total_overcharge_amount: Decimal
-    average_variance_per_affected_policy: Decimal
-    max_single_policy_variance: Decimal
-    multi_defect_policy_count: int
+    defect_exposures: list[DefectExposure] = Field(default_factory=list)
     issue_breakdown: list[DefectExposure] = Field(default_factory=list)
-    performance_telemetry: dict[str, Any] = Field(default_factory=dict)
-
+    metadata: dict[str, Any] = Field(default_factory=dict)

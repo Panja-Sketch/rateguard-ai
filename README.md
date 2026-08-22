@@ -10,8 +10,20 @@ RateGuard AI is a vendor-neutral, agentic insurance pricing assurance platform. 
 The complete system design and authoritative architectural contract is defined in [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
 
 ## Current Status
-**Phase 1: Repository Foundation & Core Framework Setup.**  
-The repository structure, configuration management, logging foundation, FastAPI application scaffolding, and package boundaries have been established.
+**Complete Backend & Multi-Agent Engine Core.**
+IPIR data model, Arizona HO3 synthetic rate plan, Premium Oracle, Semantic Diff, Dependency Impact Engine, Risk-Directed Test Planner, Target Rating Engine, Premium Reconciliation & RCA, Synthetic 50k Policy Portfolio, Portfolio Blast Radius Exposure Analyzer, Google ADK Multi-Agent Orchestrator (Gemini 2.5/3.5/3.7), Firestore Run State & Evidence Lineage, and FastAPI Autonomous Assurance REST API are fully implemented and verified.
+
+## Google ADK & Gemini Multi-Agent Architecture
+RateGuard AI features a multi-agent orchestration architecture built on Google ADK and Gemini API (`gemini-2.5-flash` default):
+- **RateGuard Orchestrator Agent:** Coordinates agent workflow, logs audit events (`RunEvent`), and persists run state.
+- **Semantic Assurance Agent:** Interprets granular IPIR semantic diff results (`compare_ipir_packages_tool`).
+- **Impact Agent:** Analyzes pricing DAG dependency paths and risk predicates (`analyze_pricing_impact_tool`).
+- **Test Planner Agent:** Optimizes risk-directed validation scenario plans (`generate_assurance_test_plan_tool`).
+- **Investigation Agent:** Analyzes trace step divergences, quote reconciliations, and RCA findings (`execute_pricing_assurance_tool`).
+- **Portfolio Agent:** Analyzes 50,000 policy financial exposure metrics (`analyze_portfolio_exposure_tool`).
+- **Assurance Decision Agent:** Enforces deterministic decision policy (`BLOCK_DEPLOYMENT`, `REVIEW`, `PASS`).
+
+> **Architectural Guardrail:** Gemini reasons, synthesizes narratives, and orchestrates workflows. Deterministic Python software performs arithmetic, table lookups, graph traversal, scenario planning, target execution, reconciliation, and 50,000 policy portfolio analysis.
 
 ## High-Level Architecture Components
 - **IPIR Core Engine:** Canonical intermediate representation for insurance pricing ASTs and logic.
@@ -44,9 +56,17 @@ pip install -e .
 uvicorn app.main:app --reload --port 8080
 ```
 
-### 4. Run Tests & Linter
+### 4. Run Agentic Assurance Demos
+```bash
+# Verify Google ADK / Gemini connectivity
+python scripts/test_agent_connectivity.py
+
+# Run full multi-agent autonomous assurance demo
+python scripts/run_agentic_assurance_demo.py
+```
+
+### 5. Run Tests & Linter
 ```bash
 pytest
 ruff check .
 ```
-

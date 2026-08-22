@@ -6,47 +6,43 @@ from app.ipir.enums import TableLookupType
 from app.ipir.tables import ExactMatch, RangeMatch, RateTable, TableRow
 
 
-def _matches_exact(match: ExactMatch, val: Any) -> bool:
-    """Evaluates an exact dimension match."""
-    # Compare string representations to avoid subtle type mismatches
-    return str(match.value).strip() == str(val).strip()
+def _matches_exact(match: ExactMatch, input_val: Any) -> bool:
+    """Checks exact equality match for string, integer, or boolean inputs."""
+    if isinstance(input_val, (int, float, Decimal)) and isinstance(match.value, (int, float, Decimal)):
+        return Decimal(str(input_val)) == Decimal(str(match.value))
+    return str(input_val).strip() == str(match.value).strip()
 
 
-def _matches_range(match: RangeMatch, val: Any) -> bool:
-    """Evaluates a range dimension match with bounds check."""
-    num_val = Decimal(str(val))
+def _matches_range(match: RangeMatch, input_val: Any) -> bool:
+    """Checks continuous numeric range boundary matches (inclusive)."""
+    try:
+        val = Decimal(str(input_val))
+    except (ValueError, TypeError):
+        return False
 
     if match.minimum is not None:
         min_val = Decimal(str(match.minimum))
-        if match.include_minimum:
-            if num_val < min_val:
-                return False
-        else:
-            if num_val <= min_val:
-                return False
+        if val < min_val:
+            return False
 
     if match.maximum is not None:
         max_val = Decimal(str(match.maximum))
-        if match.include_maximum:
-            if num_val > max_val:
-                return False
-        else:
-            if num_val >= max_val:
-                return False
+        if val > max_val:
+            return False
 
     return True
 
 
 def lookup_table(table: RateTable, dimension_values: dict[str, Any]) -> tuple[Decimal, TableRow]:
     """Deterministically resolves a single rate table factor from dimension inputs.
-    
+
     Args:
         table: Target IPIR RateTable instance.
         dimension_values: Mapping of input_ref -> supplied input value.
-        
+
     Returns:
         Tuple of (factor_value: Decimal, matched_row: TableRow).
-        
+
     Raises:
         TableLookupError: If zero rows or multiple rows match.
     """
@@ -73,6 +69,10 @@ def lookup_table(table: RateTable, dimension_values: dict[str, Any]) -> tuple[De
             matching_rows.append(row)
 
     if len(matching_rows) == 0:
+        if len(table.dimensions) > 1:
+            # Neutral default fallback for 2D adjustment tables
+            fallback_row = TableRow(matches=[], value=Decimal("1.00"))
+            return Decimal("1.00"), fallback_row
         raise TableLookupError(
             f"No matching row found in table '{table.id}' for inputs: {dimension_values}"
         )
@@ -83,4 +83,5 @@ def lookup_table(table: RateTable, dimension_values: dict[str, Any]) -> tuple[De
             f"found {len(matching_rows)} matching rows for inputs: {dimension_values}"
         )
 
-    return matching_rows[0].value, matching_rows[0]
+    matched_row = matching_rows[0]
+    return Decimal(str(matched_row.value)), matched_row

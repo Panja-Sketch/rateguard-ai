@@ -2,27 +2,23 @@ from decimal import Decimal
 
 
 def generate_range_boundary_values(
-    minimum: Decimal | int | None, maximum: Decimal | int | None
-) -> dict[str, int | Decimal]:
-    """Generates boundary values (just below, lower, interior, upper, just above) for ranges."""
-    boundaries: dict[str, int | Decimal] = {}
+    minimum: int | Decimal | str | None, maximum: int | Decimal | str | None
+) -> dict[str, int]:
+    """Generates boundary values (lower bound, upper bound, interior, just below, just above)."""
+    min_num = int(str(minimum)) if minimum is not None else None
+    max_num = int(str(maximum)) if maximum is not None else None
 
-    if minimum is not None:
-        min_is_int = isinstance(minimum, (int, Decimal)) and Decimal(str(minimum)) % 1 == 0
-        min_num = int(minimum) if min_is_int else minimum
+    boundaries: dict[str, int] = {}
+
+    if min_num is not None:
         boundaries["just_below"] = min_num - 1
         boundaries["lower_bound"] = min_num
 
-    if maximum is not None:
-        max_is_int = isinstance(maximum, (int, Decimal)) and Decimal(str(maximum)) % 1 == 0
-        max_num = int(maximum) if max_is_int else maximum
+    if min_num is not None and max_num is not None:
+        boundaries["interior"] = (min_num + max_num) // 2
+
+    if max_num is not None:
         boundaries["upper_bound"] = max_num
         boundaries["just_above"] = max_num + 1
 
-    if minimum is not None and maximum is not None:
-        min_num = int(minimum)
-        max_num = int(maximum)
-        boundaries["interior"] = (min_num + max_num) // 2
-
     return boundaries
-

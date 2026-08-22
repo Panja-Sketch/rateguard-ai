@@ -3,6 +3,7 @@ import json
 import random
 import sys
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 # Ensure backend root is in sys.path when script is executed directly
@@ -24,7 +25,7 @@ def generate_portfolio(
 
     territories = [f"T{i:02d}" for i in range(1, 21)]
     deductibles = [500, 1000, 2500, 5000]
-    constructions = ["FRAME", "MASONRY", "SUPERIOR"]
+    constructions = ["FRAME", "MASONRY", "FIRE_RESISTIVE"]
     transaction_types = [TransactionType.NEW_BUSINESS.value, TransactionType.RENEWAL.value]
 
     pkg_start = package.effective_period.start
@@ -57,42 +58,47 @@ def generate_portfolio(
 
         multi_policy = random.random() < 0.35
         claims_free = random.random() < 0.70
+        claims_free_years = random.randint(3, 10) if claims_free else random.randint(0, 2)
 
-        # Effective date distribution (Sep 1, 2026 to Dec 31, 2026)
-        day_offset = random.randint(0, 120)
-        eff_date = pkg_start + timedelta(days=day_offset)
-
-        if date(2026, 9, 1) <= eff_date < date(2026, 9, 15):
+        # Effective date distribution (5% in 2026-09-01..2026-09-14)
+        if random.random() < 0.05:
+            offset = random.randint(0, 13)
+            eff_date = pkg_start + timedelta(days=offset)
             temporal_window_count += 1
+        else:
+            offset = random.randint(14, 180)
+            eff_date = pkg_start + timedelta(days=offset)
 
-        tx_type_str = random.choices(transaction_types, weights=[70, 30])[0]
+        tx_type = random.choices(transaction_types, weights=[30, 70])[0]
 
+        # Calculate authoritative expected premium via Premium Oracle
         risk = RiskInput(
+            policy_id=policy_id,
+            effective_date=eff_date,
+            transaction_type=TransactionType(tx_type),
             values={
                 "territory": territory,
                 "roof_age": roof_age,
-                "deductible": deductible,
+                "deductible": str(deductible),
                 "protection_class": protection_class,
                 "construction_type": construction_type,
                 "dwelling_limit": dwelling_limit,
                 "multi_policy": multi_policy,
                 "claims_free": claims_free,
-            }
+                "claims_free_years": claims_free_years,
+            },
         )
-
-        oracle_res = oracle.calculate(
-            package=package,
-            risk=risk,
-            effective_date=eff_date,
-            transaction_type=TransactionType(tx_type_str),
+        oracle_trace = oracle.calculate(
+            package, risk, effective_date=eff_date, transaction_type=TransactionType(tx_type)
         )
+        expected_premium = oracle_trace.final_premium
 
-        policy_record = {
+        row = {
             "policy_id": policy_id,
             "product_id": package.product.id,
-            "state": package.product.jurisdiction.state_or_province,
-            "form": package.product.form,
-            "transaction_type": tx_type_str,
+            "state": package.product.jurisdiction.state_or_province or "AZ",
+            "form": package.product.form or "HO3",
+            "transaction_type": tx_type,
             "effective_date": eff_date.isoformat(),
             "territory": territory,
             "roof_age": roof_age,
@@ -102,19 +108,23 @@ def generate_portfolio(
             "dwelling_limit": dwelling_limit,
             "multi_policy": multi_policy,
             "claims_free": claims_free,
-            "canonical_premium": str(oracle_res.final_premium),
+            "claims_free_years": claims_free_years,
+            "canonical_premium": str(expected_premium),
         }
-        policies.append(policy_record)
+        policies.append(row)
 
     summary = {
-        "portfolio_id": "AZ_HO3_2026_SYNTHETIC_50K",
+        "portfolio_size": count,
         "seed": seed,
-        "policy_count": len(policies),
-        "roof_band_21_30_population": roof_band_21_30_count,
-        "roof_band_21_30_pct": round(roof_band_21_30_count / count * 100.0, 2),
-        "temporal_window_population": temporal_window_count,
-        "temporal_window_pct": round(temporal_window_count / count * 100.0, 2),
         "territory_distribution": territory_counts,
+        "roof_band_21_30_count": roof_band_21_30_count,
+        "roof_band_21_30_population": roof_band_21_30_count,
+        "roof_band_21_30_pct": round(roof_band_21_30_count / count * 100, 2),
+        "temporal_window_count": temporal_window_count,
+        "temporal_window_pct": round(temporal_window_count / count * 100, 2),
+        "total_expected_premium": str(
+            sum(Decimal(p["canonical_premium"]) for p in policies)
+        ),
     }
 
     return policies, summary
@@ -126,46 +136,29 @@ def main() -> None:
         root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
     )
 
-    if not canonical_file.exists():
-        print(f"Error: Canonical IPIR package file not found at {canonical_file}")
-        sys.exit(1)
-
     with open(canonical_file, encoding="utf-8") as f:
-        canonical_pkg = IPIRPackage.model_validate_json(f.read())
+        package = IPIRPackage.model_validate_json(f.read())
+
+    policies, summary = generate_portfolio(package, seed=42, count=50000)
 
     portfolio_dir = root_dir / "data" / "portfolio"
     portfolio_dir.mkdir(parents=True, exist_ok=True)
 
     csv_file = portfolio_dir / "az_ho3_2026_synthetic_50k.csv"
-    json_summary_file = portfolio_dir / "az_ho3_2026_synthetic_50k_summary.json"
+    summary_file = portfolio_dir / "az_ho3_2026_synthetic_50k_summary.json"
 
-    print("Generating 50,000 synthetic policies with canonical Oracle premiums...")
-    policies, summary = generate_portfolio(canonical_pkg, seed=42, count=50000)
-
-    # Write CSV file
     fieldnames = list(policies[0].keys())
     with open(csv_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(policies)
 
-    print(f"Successfully wrote {len(policies):,} synthetic policies to: {csv_file}")
-
-    # Write Summary JSON
-    with open(json_summary_file, "w", encoding="utf-8") as f:
+    with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
-        f.write("\n")
 
-    roof_pop = summary["roof_band_21_30_population"]
-    roof_pct = summary["roof_band_21_30_pct"]
-    temp_pop = summary["temporal_window_population"]
-    temp_pct = summary["temporal_window_pct"]
-
-    print(f"Successfully wrote portfolio summary to: {json_summary_file}")
-    print(f"  Roof Age 21-30 Population: {roof_pop:,} ({roof_pct}%)")
-    print(f"  Temporal Discrepancy Window Population: {temp_pop:,} ({temp_pct}%)")
+    print(f"Successfully generated 50,000 synthetic policies CSV: {csv_file}")
+    print(f"Summary saved to: {summary_file}")
 
 
 if __name__ == "__main__":
     main()
-

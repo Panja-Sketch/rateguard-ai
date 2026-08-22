@@ -51,9 +51,15 @@ def validate_risk_inputs(
         val = risk.get(inp.id)
 
         if val is None:
-            if inp.required:
+            if inp.id == "claims_free" and "claims_free_years" in risk.values:
+                val = int(risk.values["claims_free_years"]) >= 3
+            elif inp.id == "claims_free_years" and "claims_free" in risk.values:
+                cf_bool = str(risk.values["claims_free"]).lower() in ("true", "1")
+                val = 3 if cf_bool else 0
+            elif inp.required:
                 raise InputValidationError(f"Missing required rating input: '{inp.id}'")
-            continue
+            else:
+                continue
 
         # Type conversion & validation
         dt = inp.data_type
@@ -195,15 +201,33 @@ def evaluate_package(
     for fee in package.fees:
         if is_active(fee.effective_period, effective_date):
             context[fee.id] = fee.amount
+        else:
+            context[fee.id] = Decimal("0.00")
 
     for con in package.constraints:
         if is_active(con.effective_period, effective_date):
             context[con.id] = con.amount
+        else:
+            context[con.id] = Decimal("0.00")
 
     for mod in package.modifiers:
         if is_active(mod.effective_period, effective_date):
-            mod_val = resolve_value(mod.value, context)
+            eligible = True
+            if mod.eligibility:
+                eligible = evaluate_condition(mod.eligibility, context)
+            if eligible:
+                raw_val = resolve_value(mod.value, context)
+                if mod.modifier_type == ModifierType.PERCENTAGE_DISCOUNT:
+                    mod_val = Decimal("1.00") - Decimal(str(raw_val))
+                elif mod.modifier_type == ModifierType.PERCENTAGE_SURCHARGE:
+                    mod_val = Decimal("1.00") + Decimal(str(raw_val))
+                else:
+                    mod_val = Decimal(str(raw_val))
+            else:
+                mod_val = Decimal("1.00")
             context[mod.id] = mod_val
+        else:
+            context[mod.id] = Decimal("1.00")
 
     # 5. Resolve Active Rate Tables
     for table in package.tables:
@@ -267,10 +291,12 @@ def evaluate_package(
         base_val = evaluate_expression(node.expression, context)
         curr_val = Decimal(str(base_val))
 
-        if node.rounding_rule_ref:
+        rr = node.rounding_rule
+        if rr is None and node.rounding_rule_ref:
             rr = next((r for r in package.rounding_rules if r.id == node.rounding_rule_ref), None)
-            if rr:
-                curr_val = round_decimal(curr_val, rr.precision, rr.mode)
+
+        if rr:
+            curr_val = round_decimal(curr_val, rr.precision, rr.mode)
 
         # Apply active modifiers declared in this calculation node's depends_on list
         mod_matches = [

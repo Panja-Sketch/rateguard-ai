@@ -23,9 +23,9 @@ def load_synthetic_portfolio_csv(csv_path: Path) -> list[SyntheticPolicy]:
             policies.append(
                 SyntheticPolicy(
                     policy_id=row["policy_id"],
-                    product_id=row["product_id"],
-                    state=row["state"],
-                    form=row["form"],
+                    product_id=row.get("product_id", "AZ_HO3"),
+                    state=row.get("state", "AZ"),
+                    form=row.get("form", "HO3"),
                     transaction_type=TransactionType(row["transaction_type"]),
                     effective_date=date.fromisoformat(row["effective_date"]),
                     territory=row["territory"],
@@ -36,7 +36,8 @@ def load_synthetic_portfolio_csv(csv_path: Path) -> list[SyntheticPolicy]:
                     dwelling_limit=int(row["dwelling_limit"]),
                     multi_policy=row["multi_policy"].lower() == "true",
                     claims_free=row["claims_free"].lower() == "true",
-                    canonical_premium=Decimal(row["canonical_premium"]),
+                    claims_free_years=int(row.get("claims_free_years", 3)),
+                    canonical_premium=Decimal(row.get("canonical_premium", row.get("expected_canonical_premium", "0"))),
                 )
             )
     return policies
@@ -51,11 +52,10 @@ def main() -> None:
         root_dir / "data" / "implementations" / "defective" / "AZ_HO3_2026_09_ipir.json"
     )
     csv_file = root_dir / "data" / "portfolio" / "az_ho3_2026_synthetic_50k.csv"
-    output_json = root_dir / "data" / "portfolio" / "az_ho3_2026_portfolio_impact.json"
 
-    if not canonical_file.exists() or not defective_file.exists() or not csv_file.exists():
-        print("Error: Required input files not found.")
-        sys.exit(1)
+    print("\n========================================================")
+    print("      RateGuard AI -- 50,000 Policy Portfolio Analyzer  ")
+    print("========================================================\n")
 
     with open(canonical_file, encoding="utf-8") as f:
         canonical_pkg = IPIRPackage.model_validate_json(f.read())
@@ -63,81 +63,40 @@ def main() -> None:
     with open(defective_file, encoding="utf-8") as f:
         defective_pkg = IPIRPackage.model_validate_json(f.read())
 
-    print("Loading 50,000 synthetic policies...")
+    print(f"Loading synthetic portfolio from: {csv_file}")
     policies = load_synthetic_portfolio_csv(csv_file)
+    print(f"Loaded {len(policies):,} synthetic policy records.")
 
-    print("Executing RateGuard Portfolio Blast Radius & Financial Exposure Analysis...")
+    print("\nExecuting Portfolio Analyzer across 50,000 policies...")
     analyzer = PortfolioAnalyzer()
     res = analyzer.analyze(policies, canonical_pkg, defective_pkg)
 
-    # Write output JSON artifact
+    print("\n--------------------------------------------------------")
+    print("PORTFOLIO BLAST RADIUS & FINANCIAL EXPOSURE RESULTS")
+    print("--------------------------------------------------------")
+    print(f"Total Portfolio Policies:      {res.total_policies:,}")
+    print(f"Exposed Policies (in DAG):    {res.exposed_policy_count:,} ({res.exposed_policy_pct:.2f}%)")
+    print(f"Financially Affected Policies: {res.financially_affected_count:,} ({res.financially_affected_pct:.2f}%)")
+    print(f"Total Expected Premium:        ${res.total_expected_premium:,.2f}")
+    print(f"Total Billed Premium (Target): ${res.total_target_premium:,.2f}")
+    print(f"Net Signed Variance (Exposure): ${res.total_signed_variance:,.2f}")
+    print(f"Total Absolute Variance:       ${res.total_absolute_variance:,.2f}")
+
+    print("\nEXPOSURE BREAKDOWN BY DEFECT / ISSUE:")
+    for de in res.defect_exposures:
+        print(f"\n  Issue ID:   {de.issue_id} ({de.issue_name})")
+        print(f"    Exposed Policies:          {de.exposed_count:,} ({de.exposed_policy_pct:.2f}%)")
+        print(f"    Financially Affected:       {de.financially_affected_count:,} ({de.affected_policy_pct:.2f}%)")
+        print(f"    Signed Net Exposure:        ${de.signed_variance:,.2f}")
+        print(f"    Absolute Variance:          ${de.absolute_variance:,.2f}")
+
+    output_json = root_dir / "data" / "portfolio" / "az_ho3_2026_portfolio_impact.json"
     with open(output_json, "w", encoding="utf-8") as f:
         f.write(res.model_dump_json(indent=2))
-        f.write("\n")
 
-    print("\n========================================================")
-    print("           RateGuard Portfolio Financial Exposure        ")
-    print("========================================================\n")
-    print("Portfolio Overview")
-    print("--------------------------------------------------------")
-    print(f"Policies Analyzed:                      {res.total_policies:,}")
-    print(
-        f"Exposed Policies (Semantic Region):     {res.exposed_policy_count:,} "
-        f"({res.exposed_policy_pct}%)"
-    )
-    print(
-        f"Behaviorally Affected (Trace Diverged): {res.behaviorally_affected_count:,} "
-        f"({res.behaviorally_affected_pct}%)"
-    )
-    print(
-        f"Financially Affected (Premium Variance): {res.financially_affected_count:,} "
-        f"({res.financially_affected_pct}%)\n"
-    )
-
-    print("Financial Exposure Metrics")
-    print("--------------------------------------------------------")
-    print(f"Expected Canonical Premium:              ${res.total_expected_premium:,.2f}")
-    print(f"Target Engine Premium:                ${res.total_target_premium:,.2f}")
-    print(f"Signed Premium Variance:                ${res.total_signed_variance:,.2f}")
-    print(f"Total Absolute Variance:              ${res.total_absolute_variance:,.2f}")
-    print(
-        f"Undercharged Policies:                {res.undercharged_policy_count:,} "
-        f"(Total Undercharge: ${res.total_undercharge_amount:,.2f})"
-    )
-    print(
-        f"Overcharged Policies:                 {res.overcharged_policy_count:,} "
-        f"(Total Overcharge: ${res.total_overcharge_amount:,.2f})"
-    )
-    print(
-        f"Average Variance per Affected Policy: ${res.average_variance_per_affected_policy:,.2f}"
-    )
-    print(f"Maximum Single Policy Variance:       ${res.max_single_policy_variance:,.2f}\n")
-
-    print("Issue-by-Issue Exposure Breakdown")
-    print("--------------------------------------------------------")
-    for issue in res.issue_breakdown:
-        print(f"Issue: {issue.issue_name}")
-        exp_c = f"{issue.exposed_count:,}"
-        beh_c = f"{issue.behaviorally_affected_count:,}"
-        fin_c = f"{issue.financially_affected_count:,}"
-        print(f"  Exposed: {exp_c} | Behavioral: {beh_c} | Financial: {fin_c}")
-        sig_v = f"${issue.signed_variance:,.2f}"
-        abs_v = f"${issue.absolute_variance:,.2f}"
-        print(f"  Signed Variance: {sig_v} | Absolute Variance: {abs_v}\n")
-
-    print("Overlapping & Multi-Defect Exposure")
-    print("--------------------------------------------------------")
-    print(f"Policies Affected by Multiple Issues:   {res.multi_defect_policy_count:,}\n")
-
-    print("Performance & Execution Telemetry")
-    print("--------------------------------------------------------")
-    t_sec = res.performance_telemetry["elapsed_seconds"]
-    t_pps = res.performance_telemetry["policies_per_second"]
-    print(f"Elapsed Runtime:                        {t_sec} seconds")
-    print(f"Analysis Throughput:                    {t_pps:,} policies/sec")
+    print(f"\nSaved portfolio impact summary JSON to: {output_json}")
     print("========================================================\n")
 
 
 if __name__ == "__main__":
     main()
-

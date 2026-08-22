@@ -1,7 +1,7 @@
 {
   "ipir_version": "0.1",
   "id": "AZ_HO3_2026_09",
-  "name": "Arizona Homeowners HO3 Synthetic Rate Plan",
+  "name": "Arizona Homeowners HO3 Rate Plan (Canonical 2026.09)",
   "version": "2026.09",
   "product": {
     "id": "AZ_HO3",
@@ -24,10 +24,10 @@
   "inputs": [
     {
       "id": "territory",
-      "name": "Territory Code",
-      "data_type": "CATEGORY",
+      "name": "Rating Territory Code",
+      "data_type": "STRING",
       "required": true,
-      "description": null,
+      "description": "Arizona rating territory code (T01 through T20)",
       "unit": null,
       "allowed_values": [
         "T01",
@@ -60,23 +60,28 @@
       "name": "Roof Age (Years)",
       "data_type": "INTEGER",
       "required": true,
-      "description": null,
-      "unit": "years",
+      "description": "Age of roof in years (0 to 50)",
+      "unit": null,
       "allowed_values": null,
-      "minimum": 0,
-      "maximum": 80,
+      "minimum": "0",
+      "maximum": "50",
       "provenance": null
     },
     {
       "id": "deductible",
-      "name": "Policy Deductible ($)",
+      "name": "Policy Deductible Amount ($)",
       "data_type": "MONEY",
       "required": true,
-      "description": "Allowed deductible values: 500, 1000, 2500, 5000",
+      "description": "Policy all-peril deductible ($500, $1000, $2500, $5000)",
       "unit": null,
-      "allowed_values": null,
-      "minimum": 500,
-      "maximum": 5000,
+      "allowed_values": [
+        "500",
+        "1000",
+        "2500",
+        "5000"
+      ],
+      "minimum": null,
+      "maximum": null,
       "provenance": null
     },
     {
@@ -84,23 +89,24 @@
       "name": "Public Protection Class",
       "data_type": "INTEGER",
       "required": true,
-      "description": null,
+      "description": "ISO public protection class (1 to 10)",
       "unit": null,
       "allowed_values": null,
-      "minimum": 1,
-      "maximum": 10,
+      "minimum": "1",
+      "maximum": "10",
       "provenance": null
     },
     {
       "id": "construction_type",
-      "name": "Construction Type",
-      "data_type": "CATEGORY",
+      "name": "Building Construction Type",
+      "data_type": "STRING",
       "required": true,
-      "description": null,
+      "description": "Construction type (FRAME, MASONRY, FIRE_RESISTIVE, SUPERIOR)",
       "unit": null,
       "allowed_values": [
         "FRAME",
         "MASONRY",
+        "FIRE_RESISTIVE",
         "SUPERIOR"
       ],
       "minimum": null,
@@ -109,22 +115,22 @@
     },
     {
       "id": "dwelling_limit",
-      "name": "Dwelling Coverage Limit ($)",
+      "name": "Coverage A Dwelling Limit ($)",
       "data_type": "MONEY",
       "required": true,
-      "description": null,
+      "description": "Coverage A Dwelling replacement cost limit ($100,000 to $2,000,000)",
       "unit": null,
       "allowed_values": null,
-      "minimum": 100000,
-      "maximum": 2000000,
+      "minimum": "100000",
+      "maximum": "2000000",
       "provenance": null
     },
     {
-      "id": "multi_policy",
-      "name": "Has Multi-Policy Discount",
+      "id": "claims_free",
+      "name": "Claims-Free Prior Years",
       "data_type": "BOOLEAN",
       "required": true,
-      "description": null,
+      "description": "Flag indicating policyholder has no claims in prior 3 years",
       "unit": null,
       "allowed_values": null,
       "minimum": null,
@@ -132,11 +138,11 @@
       "provenance": null
     },
     {
-      "id": "claims_free",
-      "name": "Is Claims Free",
+      "id": "multi_policy",
+      "name": "Multi-Policy Discount Eligible",
       "data_type": "BOOLEAN",
       "required": true,
-      "description": null,
+      "description": "Flag indicating companion auto or umbrella policy",
       "unit": null,
       "allowed_values": null,
       "minimum": null,
@@ -147,23 +153,23 @@
   "constants": [
     {
       "id": "base_rate",
-      "name": "Annual Base Rate",
+      "name": "Base Premium Rate",
       "value": "650.00",
-      "description": "Synthetic starting annual homeowners base rate",
+      "description": null,
       "effective_period": null,
       "provenance": null
     },
     {
-      "id": "minimum_policy_premium_constant",
-      "name": "Minimum Policy Premium Constant",
+      "id": "MINIMUM_PREMIUM",
+      "name": "Minimum Policy Premium Floor",
       "value": "575.00",
       "description": null,
       "effective_period": null,
       "provenance": null
     },
     {
-      "id": "policy_fee_constant",
-      "name": "Policy Fee Constant",
+      "id": "POLICY_FEE",
+      "name": "Statutory Policy Fee",
       "value": "25.00",
       "description": null,
       "effective_period": null,
@@ -173,7 +179,7 @@
   "tables": [
     {
       "id": "territory_factor",
-      "name": "Territory Rating Factor Table",
+      "name": "Territory Base Factor Table",
       "dimensions": [
         {
           "input_ref": "territory",
@@ -187,7 +193,7 @@
               "value": "T01"
             }
           ],
-          "value": "0.88"
+          "value": "1.00"
         },
         {
           "matches": [
@@ -195,7 +201,7 @@
               "value": "T02"
             }
           ],
-          "value": "0.90"
+          "value": "1.01"
         },
         {
           "matches": [
@@ -203,7 +209,7 @@
               "value": "T03"
             }
           ],
-          "value": "0.92"
+          "value": "1.02"
         },
         {
           "matches": [
@@ -211,7 +217,7 @@
               "value": "T04"
             }
           ],
-          "value": "0.94"
+          "value": "1.04"
         },
         {
           "matches": [
@@ -219,7 +225,7 @@
               "value": "T05"
             }
           ],
-          "value": "0.96"
+          "value": "1.05"
         },
         {
           "matches": [
@@ -227,7 +233,7 @@
               "value": "T06"
             }
           ],
-          "value": "0.98"
+          "value": "1.06"
         },
         {
           "matches": [
@@ -235,7 +241,7 @@
               "value": "T07"
             }
           ],
-          "value": "1.00"
+          "value": "1.07"
         },
         {
           "matches": [
@@ -243,7 +249,7 @@
               "value": "T08"
             }
           ],
-          "value": "1.02"
+          "value": "1.09"
         },
         {
           "matches": [
@@ -251,7 +257,7 @@
               "value": "T09"
             }
           ],
-          "value": "1.04"
+          "value": "1.10"
         },
         {
           "matches": [
@@ -259,7 +265,7 @@
               "value": "T10"
             }
           ],
-          "value": "1.06"
+          "value": "1.11"
         },
         {
           "matches": [
@@ -267,7 +273,7 @@
               "value": "T11"
             }
           ],
-          "value": "1.08"
+          "value": "1.12"
         },
         {
           "matches": [
@@ -275,7 +281,7 @@
               "value": "T12"
             }
           ],
-          "value": "1.10"
+          "value": "1.14"
         },
         {
           "matches": [
@@ -283,7 +289,7 @@
               "value": "T13"
             }
           ],
-          "value": "1.12"
+          "value": "1.15"
         },
         {
           "matches": [
@@ -291,7 +297,7 @@
               "value": "T14"
             }
           ],
-          "value": "1.14"
+          "value": "1.16"
         },
         {
           "matches": [
@@ -299,7 +305,7 @@
               "value": "T15"
             }
           ],
-          "value": "1.16"
+          "value": "1.18"
         },
         {
           "matches": [
@@ -307,7 +313,7 @@
               "value": "T16"
             }
           ],
-          "value": "1.18"
+          "value": "1.19"
         },
         {
           "matches": [
@@ -323,7 +329,7 @@
               "value": "T18"
             }
           ],
-          "value": "1.22"
+          "value": "1.21"
         },
         {
           "matches": [
@@ -331,7 +337,7 @@
               "value": "T19"
             }
           ],
-          "value": "1.24"
+          "value": "1.23"
         },
         {
           "matches": [
@@ -339,7 +345,7 @@
               "value": "T20"
             }
           ],
-          "value": "1.26"
+          "value": "1.24"
         }
       ],
       "effective_period": null,
@@ -358,8 +364,8 @@
         {
           "matches": [
             {
-              "minimum": 0,
-              "maximum": 5,
+              "minimum": "0",
+              "maximum": "5",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -369,19 +375,19 @@
         {
           "matches": [
             {
-              "minimum": 6,
-              "maximum": 10,
+              "minimum": "6",
+              "maximum": "10",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "0.95"
+          "value": "1.00"
         },
         {
           "matches": [
             {
-              "minimum": 11,
-              "maximum": 20,
+              "minimum": "11",
+              "maximum": "20",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -391,8 +397,8 @@
         {
           "matches": [
             {
-              "minimum": 21,
-              "maximum": 30,
+              "minimum": "21",
+              "maximum": "30",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -402,24 +408,13 @@
         {
           "matches": [
             {
-              "minimum": 31,
-              "maximum": 40,
+              "minimum": "31",
+              "maximum": "50",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
           "value": "1.50"
-        },
-        {
-          "matches": [
-            {
-              "minimum": 41,
-              "maximum": 80,
-              "include_minimum": true,
-              "include_maximum": true
-            }
-          ],
-          "value": "1.70"
         }
       ],
       "effective_period": null,
@@ -441,7 +436,7 @@
               "value": "500"
             }
           ],
-          "value": "1.15"
+          "value": "1.10"
         },
         {
           "matches": [
@@ -457,7 +452,7 @@
               "value": "2500"
             }
           ],
-          "value": "0.85"
+          "value": "0.90"
         },
         {
           "matches": [
@@ -465,7 +460,7 @@
               "value": "5000"
             }
           ],
-          "value": "0.72"
+          "value": "0.80"
         }
       ],
       "effective_period": null,
@@ -484,30 +479,19 @@
         {
           "matches": [
             {
-              "minimum": 1,
-              "maximum": 2,
+              "minimum": "1",
+              "maximum": "3",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "0.92"
+          "value": "0.95"
         },
         {
           "matches": [
             {
-              "minimum": 3,
-              "maximum": 4,
-              "include_minimum": true,
-              "include_maximum": true
-            }
-          ],
-          "value": "0.96"
-        },
-        {
-          "matches": [
-            {
-              "minimum": 5,
-              "maximum": 6,
+              "minimum": "4",
+              "maximum": "6",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -517,24 +501,24 @@
         {
           "matches": [
             {
-              "minimum": 7,
-              "maximum": 8,
+              "minimum": "7",
+              "maximum": "8",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "1.08"
+          "value": "1.10"
         },
         {
           "matches": [
             {
-              "minimum": 9,
-              "maximum": 10,
+              "minimum": "9",
+              "maximum": "10",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "1.18"
+          "value": "1.25"
         }
       ],
       "effective_period": null,
@@ -542,7 +526,7 @@
     },
     {
       "id": "construction_factor",
-      "name": "Construction Type Factor Table",
+      "name": "Construction Factor Table",
       "dimensions": [
         {
           "input_ref": "construction_type",
@@ -569,10 +553,18 @@
         {
           "matches": [
             {
+              "value": "FIRE_RESISTIVE"
+            }
+          ],
+          "value": "0.85"
+        },
+        {
+          "matches": [
+            {
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.88"
+          "value": "0.80"
         }
       ],
       "effective_period": null,
@@ -591,8 +583,8 @@
         {
           "matches": [
             {
-              "minimum": 100000,
-              "maximum": 249999,
+              "minimum": "100000",
+              "maximum": "250000",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -602,19 +594,8 @@
         {
           "matches": [
             {
-              "minimum": 250000,
-              "maximum": 399999,
-              "include_minimum": true,
-              "include_maximum": true
-            }
-          ],
-          "value": "1.00"
-        },
-        {
-          "matches": [
-            {
-              "minimum": 400000,
-              "maximum": 599999,
+              "minimum": "250001",
+              "maximum": "500000",
               "include_minimum": true,
               "include_maximum": true
             }
@@ -624,24 +605,24 @@
         {
           "matches": [
             {
-              "minimum": 600000,
-              "maximum": 999999,
+              "minimum": "500001",
+              "maximum": "1000000",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "1.35"
+          "value": "1.20"
         },
         {
           "matches": [
             {
-              "minimum": 1000000,
-              "maximum": 2000000,
+              "minimum": "1000001",
+              "maximum": "2000000",
               "include_minimum": true,
               "include_maximum": true
             }
           ],
-          "value": "1.60"
+          "value": "1.50"
         }
       ],
       "effective_period": null,
@@ -649,7 +630,7 @@
     },
     {
       "id": "territory_construction_adjustment",
-      "name": "Territory x Construction Adjustment Table",
+      "name": "2D Territory-Construction Adjustment Table",
       "dimensions": [
         {
           "input_ref": "territory",
@@ -681,7 +662,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -692,7 +673,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -714,7 +695,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -725,7 +706,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -747,7 +728,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -758,7 +739,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -780,7 +761,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -791,7 +772,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -813,7 +794,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -824,7 +805,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -846,7 +827,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -857,7 +838,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -879,7 +860,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -890,7 +871,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -912,7 +893,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -923,7 +904,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -945,7 +926,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -956,7 +937,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -978,7 +959,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -989,7 +970,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1011,7 +992,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1022,7 +1003,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1044,7 +1025,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1055,7 +1036,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1077,7 +1058,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1088,7 +1069,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1110,7 +1091,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1121,7 +1102,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1143,7 +1124,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1154,7 +1135,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1176,7 +1157,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.00"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1187,7 +1168,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1209,7 +1190,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.02"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1220,7 +1201,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1231,7 +1212,7 @@
               "value": "FRAME"
             }
           ],
-          "value": "1.09"
+          "value": "1.00"
         },
         {
           "matches": [
@@ -1242,7 +1223,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.03"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1253,7 +1234,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1264,7 +1245,7 @@
               "value": "FRAME"
             }
           ],
-          "value": "1.10"
+          "value": "1.00"
         },
         {
           "matches": [
@@ -1275,7 +1256,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.04"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1286,7 +1267,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         },
         {
           "matches": [
@@ -1297,7 +1278,7 @@
               "value": "FRAME"
             }
           ],
-          "value": "1.12"
+          "value": "1.00"
         },
         {
           "matches": [
@@ -1308,7 +1289,7 @@
               "value": "MASONRY"
             }
           ],
-          "value": "1.05"
+          "value": "0.98"
         },
         {
           "matches": [
@@ -1319,7 +1300,7 @@
               "value": "SUPERIOR"
             }
           ],
-          "value": "0.98"
+          "value": "0.95"
         }
       ],
       "effective_period": null,
@@ -1330,7 +1311,7 @@
   "calculations": [
     {
       "id": "gross_risk_premium",
-      "name": "Gross Risk Premium",
+      "name": "Gross Risk Premium Calculation",
       "expression": {
         "operator": "MULTIPLY",
         "operands": [
@@ -1370,14 +1351,19 @@
         "dwelling_limit_factor",
         "territory_construction_adjustment"
       ],
-      "rounding_rule_ref": "premium_rounding",
+      "rounding_rule_ref": "standard_currency_rounding",
+      "rounding_rule": {
+        "id": "standard_currency_rounding",
+        "precision": 2,
+        "mode": "HALF_UP"
+      },
       "effective_period": null,
       "provenance": null,
-      "description": "Base rate multiplied by all risk factor adjustments"
+      "description": null
     },
     {
       "id": "premium_after_discounts",
-      "name": "Premium After Discounts",
+      "name": "Premium After Discounts Calculation",
       "expression": {
         "ref": "gross_risk_premium"
       },
@@ -1386,14 +1372,19 @@
         "multi_policy_discount",
         "claims_free_discount"
       ],
-      "rounding_rule_ref": "premium_rounding",
+      "rounding_rule_ref": "standard_currency_rounding",
+      "rounding_rule": {
+        "id": "standard_currency_rounding",
+        "precision": 2,
+        "mode": "HALF_UP"
+      },
       "effective_period": null,
       "provenance": null,
-      "description": "Gross risk premium minus applicable discounts"
+      "description": null
     },
     {
       "id": "premium_after_minimum",
-      "name": "Premium After Minimum Enforced",
+      "name": "Premium After Minimum Floor Calculation",
       "expression": {
         "ref": "premium_after_discounts"
       },
@@ -1401,43 +1392,40 @@
         "premium_after_discounts",
         "policy_minimum"
       ],
-      "rounding_rule_ref": "premium_rounding",
+      "rounding_rule_ref": "standard_currency_rounding",
+      "rounding_rule": {
+        "id": "standard_currency_rounding",
+        "precision": 2,
+        "mode": "HALF_UP"
+      },
       "effective_period": null,
       "provenance": null,
-      "description": "Premium after applying $575.00 minimum policy premium constraint"
+      "description": null
     },
     {
       "id": "total_policy_premium",
-      "name": "Total Policy Premium",
+      "name": "Total Final Policy Premium Calculation",
       "expression": {
-        "operator": "ADD",
-        "operands": [
-          {
-            "ref": "premium_after_minimum"
-          },
-          {
-            "ref": "policy_fee"
-          }
-        ]
+        "ref": "premium_after_minimum"
       },
       "depends_on": [
         "premium_after_minimum",
         "policy_fee"
       ],
-      "rounding_rule_ref": "premium_rounding",
+      "rounding_rule_ref": "standard_currency_rounding",
+      "rounding_rule": {
+        "id": "standard_currency_rounding",
+        "precision": 2,
+        "mode": "HALF_UP"
+      },
       "effective_period": null,
       "provenance": null,
-      "description": "Final total policy premium including $25.00 policy fee"
+      "description": null
     }
   ],
   "rounding_rules": [
     {
-      "id": "factor_rounding",
-      "precision": 4,
-      "mode": "HALF_UP"
-    },
-    {
-      "id": "premium_rounding",
+      "id": "standard_currency_rounding",
       "precision": 2,
       "mode": "HALF_UP"
     }
@@ -1445,7 +1433,7 @@
   "modifiers": [
     {
       "id": "multi_policy_discount",
-      "name": "Multi-Policy Discount",
+      "name": "Multi-Policy Discount (12%)",
       "modifier_type": "PERCENTAGE_DISCOUNT",
       "applies_to": "gross_risk_premium",
       "value": "0.12",
@@ -1458,16 +1446,13 @@
           "value": true
         }
       },
-      "sequence": 1,
-      "effective_period": {
-        "start": "2026-09-01",
-        "end": null
-      },
+      "sequence": null,
+      "effective_period": null,
       "provenance": null
     },
     {
       "id": "claims_free_discount",
-      "name": "Claims-Free Discount",
+      "name": "Claims-Free Discount (5%)",
       "modifier_type": "PERCENTAGE_DISCOUNT",
       "applies_to": "gross_risk_premium",
       "value": "0.05",
@@ -1480,7 +1465,7 @@
           "value": true
         }
       },
-      "sequence": 2,
+      "sequence": null,
       "effective_period": {
         "start": "2026-09-01",
         "end": null
@@ -1491,50 +1476,90 @@
   "constraints": [
     {
       "id": "policy_minimum",
-      "name": "Minimum Policy Premium Constraint",
+      "name": "Minimum Premium Floor ($575)",
       "constraint_type": "MINIMUM",
       "amount": "575.00",
       "applies_to": "premium_after_discounts",
-      "sequence": 3,
-      "effective_period": {
-        "start": "2026-09-01",
-        "end": null
-      },
+      "sequence": 1,
+      "effective_period": null,
       "provenance": null
     }
   ],
   "fees": [
     {
       "id": "policy_fee",
-      "name": "Policy Fee",
+      "name": "Statutory Policy Fee ($25)",
       "amount": "25.00",
       "applies_to": "premium_after_minimum",
-      "sequence": 4,
-      "effective_period": {
-        "start": "2026-09-01",
-        "end": null
-      },
+      "sequence": 2,
+      "effective_period": null,
       "provenance": null
     }
   ],
   "coverages": [
     {
-      "id": "coverage_a_dwelling",
-      "name": "Coverage A - Dwelling",
+      "id": "COV_A",
+      "name": "Dwelling Coverage A",
       "calculation_refs": [
-        "gross_risk_premium",
-        "total_policy_premium"
+        "gross_risk_premium"
       ],
-      "output_ref": "final_policy_premium"
+      "output_ref": null
+    },
+    {
+      "id": "COV_B",
+      "name": "Other Structures Coverage B",
+      "calculation_refs": [
+        "gross_risk_premium"
+      ],
+      "output_ref": null
+    },
+    {
+      "id": "COV_C",
+      "name": "Personal Property Coverage C",
+      "calculation_refs": [
+        "gross_risk_premium"
+      ],
+      "output_ref": null
+    },
+    {
+      "id": "COV_D",
+      "name": "Loss of Use Coverage D",
+      "calculation_refs": [
+        "gross_risk_premium"
+      ],
+      "output_ref": null
+    },
+    {
+      "id": "COV_E",
+      "name": "Personal Liability Coverage E",
+      "calculation_refs": [
+        "gross_risk_premium"
+      ],
+      "output_ref": null
+    },
+    {
+      "id": "COV_F",
+      "name": "Medical Payments Coverage F",
+      "calculation_refs": [
+        "gross_risk_premium"
+      ],
+      "output_ref": null
     }
   ],
   "outputs": [
     {
       "id": "final_policy_premium",
-      "name": "Final Policy Premium",
+      "name": "Final Billed Premium",
       "source_ref": "total_policy_premium",
       "currency": "USD",
-      "description": "Final total billed policy premium"
+      "description": null
+    },
+    {
+      "id": "gross_premium",
+      "name": "Gross Risk Premium Output",
+      "source_ref": "gross_risk_premium",
+      "currency": "USD",
+      "description": null
     }
   ],
   "provenance": {
@@ -1542,8 +1567,8 @@
       {
         "source_type": "ACTUARIAL_SPEC",
         "source_id": "synthetic-az-ho3-2026-09",
-        "source_name": "Synthetic Arizona HO3 Rate Specification",
-        "source_version": "2026.09",
+        "source_name": "Arizona HO3 2026 Rate Filing Spec",
+        "source_version": null,
         "location": null,
         "page": null,
         "section": null,
@@ -1552,6 +1577,6 @@
     ],
     "extraction_confidence": "1.0",
     "interpretation_confidence": "1.0",
-    "notes": "Synthetic hackathon dataset; not a real insurer's rate filing; intended as canonical pricing intent for RateGuard demonstration."
+    "notes": "Synthetic canonical Arizona HO3 rate plan built for RateGuard hackathon demo."
   }
 }

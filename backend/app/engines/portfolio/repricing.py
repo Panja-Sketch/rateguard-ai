@@ -29,6 +29,7 @@ def reprice_policy(
             "dwelling_limit": policy.dwelling_limit,
             "multi_policy": policy.multi_policy,
             "claims_free": policy.claims_free,
+            "claims_free_years": policy.claims_free_years,
         }
     )
 
@@ -56,4 +57,3 @@ def reprice_policy(
     )
 
     return _reconciler.reconcile(scenario, exp_res, act_res, diff_result, canonical_pkg)
-
