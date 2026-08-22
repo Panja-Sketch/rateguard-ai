@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "specification_id": "synthetic-az-ho3-2026-09",
+  "title": "Synthetic Arizona HO3 Rate Specification",
+  "version": "2026.09",
+  "effective_date": "2026-09-01",
+  "state": "AZ",
+  "line_of_business": "HOMEOWNERS",
+  "form": "HO3",
+  "description": "Synthetic actuarial rate specification for Arizona Homeowners HO3 rating plan. Serves as canonical pricing intent for RateGuard AI pricing assurance testing.",
+  "metadata": {
+    "author": "RateGuard Actuarial Engineering",
+    "synthetic": true,
+    "confidence": 1.0
+  },
+  "rating_structure": {
+    "base_rate": 650.00,
+    "minimum_premium": 575.00,
+    "policy_fee": 25.00,
+    "territories": 20,
+    "factors": [
+      "territory_factor",
+      "roof_age_factor",
+      "deductible_factor",
+      "protection_class_factor",
+      "construction_factor",
+      "dwelling_limit_factor",
+      "territory_construction_adjustment"
+    ],
+    "discounts": [
+      {
+        "name": "multi_policy_discount",
+        "value": 0.12,
+        "condition": "multi_policy == true"
+      },
+      {
+        "name": "claims_free_discount",
+        "value": 0.05,
+        "condition": "claims_free == true"
+      }
+    ],
+    "execution_order": [
+      "gross_risk_premium",
+      "apply_discounts",
+      "apply_minimum_premium",
+      "apply_policy_fee"
+    ]
+  }
+}
+
