@@ -2,20 +2,25 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Prevent Python from writing pyc files to disc & buffering stdout/stderr
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PORT=8080
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Install dependencies
-COPY pyproject.toml /app/
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application source code
-COPY app /app/app
+# Copy pyproject.toml and source files
+COPY pyproject.toml .
+COPY app ./app
+COPY data ./data
 
-EXPOSE 8080
+# Install Python package dependencies
+RUN pip install --no-cache-dir .
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+EXPOSE 8000
 
+# Default command for Cloud Run ($PORT)
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

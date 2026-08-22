@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     google_cloud_region: str = "us-central1"
     log_level: str = "INFO"
 
+    # CORS configuration
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+
     # BigQuery Configuration
     bigquery_enabled: bool = False
     bigquery_dataset: str = "rateguard"
