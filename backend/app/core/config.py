@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     google_cloud_region: str = "us-central1"
     log_level: str = "INFO"
 
+    # BigQuery Configuration
+    bigquery_enabled: bool = False
+    bigquery_dataset: str = "rateguard"
+    bigquery_portfolio_table: str = "synthetic_policies"
+    bigquery_results_table: str = "portfolio_exposure_results"
+    bigquery_location: str = "US"
+
+    # Pub/Sub Async Workflow Configuration
+    async_enabled: bool = False
+    pubsub_topic: str = "assurance-runs"
+    pubsub_subscription: str = "assurance-worker"
+
     model_config = SettingsConfigDict(
         env_prefix="RATEGUARD_",
         env_file=".env",
@@ -26,4 +38,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Cached settings retriever."""
     return Settings()
-

@@ -3,7 +3,13 @@ import os
 from app.storage.firestore_store import FirestoreRunStore
 from app.storage.interfaces import BaseRunStore
 from app.storage.memory_store import InMemoryRunStore
-from app.storage.models import AssuranceRunRecord, EvidenceRecord, EvidenceType, RunEvent
+from app.storage.models import (
+    AssuranceRunRecord,
+    AssuranceRunStatus,
+    EvidenceRecord,
+    EvidenceType,
+    RunEvent,
+)
 
 _global_memory_store: InMemoryRunStore | None = None
 
@@ -24,6 +30,7 @@ def get_run_store() -> BaseRunStore:
 
 __all__ = [
     "AssuranceRunRecord",
+    "AssuranceRunStatus",
     "BaseRunStore",
     "EvidenceRecord",
     "EvidenceType",

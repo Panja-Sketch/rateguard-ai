@@ -1,14 +1,17 @@
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from app.agents import AgenticAssuranceRunner
 from app.api.sources import _registered_sources
+from app.core.config import get_settings
 from app.ipir.package import IPIRPackage
+from app.messaging import AssuranceJob, get_message_publisher
 from app.services.ingestion_service import PricingSourceIngestionService
-from app.storage import EvidenceRecord, get_run_store
+from app.storage import AssuranceRunRecord, AssuranceRunStatus, EvidenceRecord, get_run_store
 
 router = APIRouter(prefix="/api/v1", tags=["assurance"])
 _ingestion_service = PricingSourceIngestionService()
@@ -34,6 +37,9 @@ class AssuranceRunRequest(BaseModel):
     )
     portfolio_csv_path: str | None = Field(
         default=None, description="Optional custom synthetic portfolio CSV path"
+    )
+    async_execution: bool | None = Field(
+        default=None, description="Explicitly request async Pub/Sub execution mode"
     )
 
 
@@ -91,8 +97,57 @@ def list_demo_packages() -> dict[str, Any]:
 
 
 @router.post("/assurance/runs")
-def create_assurance_run(req: AssuranceRunRequest) -> dict[str, Any]:
+def create_assurance_run(req: AssuranceRunRequest, response: Response) -> dict[str, Any]:
     """Initiates and executes an autonomous agentic pricing assurance workflow run."""
+    settings = get_settings()
+    is_async = req.async_execution if req.async_execution is not None else settings.async_enabled
+
+    run_id = f"RUN-{uuid.uuid4().hex[:8].upper()}"
+    job_id = f"JOB-{uuid.uuid4().hex[:8].upper()}"
+
+    if is_async:
+        # Async mode: Publish job and return 202 Accepted immediately
+        response.status_code = status.HTTP_202_ACCEPTED
+        store = get_run_store()
+        publisher = get_message_publisher()
+
+        record = AssuranceRunRecord(
+            run_id=run_id,
+            status=AssuranceRunStatus.QUEUED,
+            workflow_stage="QUEUED",
+            metadata={"job_id": job_id},
+        )
+        store.save_run(record)
+        store.log_event(
+            run_id=run_id,
+            stage="QUEUED",
+            message=f"Assurance run queued as job '{job_id}'.",
+        )
+
+        job = AssuranceJob(
+            job_id=job_id,
+            run_id=run_id,
+            left_source_id=req.left_source_id,
+            right_source_id=req.right_source_id,
+            left_package_id=req.left_package_id,
+            right_package_id=req.right_package_id,
+            include_portfolio_analysis=req.include_portfolio_analysis,
+        )
+
+        pub_msg_id = publisher.publish_assurance_job(job)
+
+        return {
+            "run_id": run_id,
+            "status": "QUEUED",
+            "job_id": job_id,
+            "message_id": pub_msg_id,
+            "message": "Assurance run queued successfully for asynchronous background execution.",
+        }
+
+    # Sync mode: Resolve packages & execute synchronously
+    left_pkg: IPIRPackage | None = None
+    right_pkg: IPIRPackage | None = None
+
     if req.left_source_id:
         desc_l = _registered_sources.get(req.left_source_id)
         if not desc_l:
@@ -103,11 +158,6 @@ def create_assurance_run(req: AssuranceRunRequest) -> dict[str, Any]:
         left_pkg = _ingestion_service.compile_source(desc_l).ipir_package
     elif req.left_package_id:
         left_pkg = resolve_demo_package(req.left_package_id)
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either left_package_id or left_source_id must be provided.",
-        )
 
     if req.right_source_id:
         desc_r = _registered_sources.get(req.right_source_id)
@@ -119,11 +169,6 @@ def create_assurance_run(req: AssuranceRunRequest) -> dict[str, Any]:
         right_pkg = _ingestion_service.compile_source(desc_r).ipir_package
     elif req.right_package_id:
         right_pkg = resolve_demo_package(req.right_package_id)
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either right_package_id or right_source_id must be provided.",
-        )
 
     store = get_run_store()
     runner = AgenticAssuranceRunner(run_store=store)
@@ -131,6 +176,7 @@ def create_assurance_run(req: AssuranceRunRequest) -> dict[str, Any]:
     result = runner.run_assurance(
         left_package=left_pkg,
         right_package=right_pkg,
+        run_id=run_id,
         include_portfolio_analysis=req.include_portfolio_analysis,
         portfolio_csv_path=req.portfolio_csv_path,
     )
@@ -155,6 +201,63 @@ def get_assurance_run(run_id: str) -> dict[str, Any]:
             detail=f"Assurance run '{run_id}' not found.",
         )
     return record.model_dump(mode="json")
+
+
+@router.get("/assurance/runs/{run_id}/events")
+def get_assurance_run_events(run_id: str) -> dict[str, Any]:
+    """Fetches ordered workflow event timeline for a specific assurance run."""
+    store = get_run_store()
+    record = store.get_run(run_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assurance run '{run_id}' not found.",
+        )
+
+    events = store.get_events(run_id)
+    return {
+        "run_id": run_id,
+        "event_count": len(events),
+        "events": [e.model_dump(mode="json") for e in events],
+    }
+
+
+@router.get("/assurance/runs/{run_id}/result")
+def get_assurance_run_result(run_id: str, response: Response) -> dict[str, Any]:
+    """Fetches structured final assurance report result."""
+    store = get_run_store()
+    record = store.get_run(run_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assurance run '{run_id}' not found.",
+        )
+
+    if record.status in (AssuranceRunStatus.QUEUED, AssuranceRunStatus.PROCESSING):
+        response.status_code = status.HTTP_202_ACCEPTED
+        return {
+            "run_id": run_id,
+            "status": record.status.value,
+            "workflow_stage": record.workflow_stage,
+            "message": "Assurance run is currently processing. Poll again shortly.",
+        }
+
+    if record.status == AssuranceRunStatus.FAILED:
+        return {
+            "run_id": run_id,
+            "status": "FAILED",
+            "error_summary": record.summary or "Assurance workflow failed.",
+        }
+
+    if not record.report:
+        return {
+            "run_id": run_id,
+            "status": record.status.value,
+            "decision": record.decision,
+            "summary": record.summary,
+        }
+
+    return record.report.model_dump(mode="json")
 
 
 @router.get("/assurance/runs/{run_id}/evidence")

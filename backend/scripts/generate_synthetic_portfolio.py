@@ -2,7 +2,7 @@ import csv
 import json
 import random
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 

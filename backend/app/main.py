@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.api.assurance import router as assurance_router
 from app.api.health import router as health_router
 from app.api.sources import router as sources_router
+from app.api.worker_endpoint import router as worker_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -30,6 +31,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(assurance_router)
 app.include_router(sources_router)
+app.include_router(worker_router)
 
 
 @app.get("/", summary="Root Status Endpoint")

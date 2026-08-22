@@ -7,9 +7,9 @@ import openpyxl
 
 from app.adapters.base import PricingSourceAdapter
 from app.adapters.models import AdapterResult, SourceDescriptor, SourceFormat
+from app.ipir.enums import ProvenanceSourceType
 from app.ipir.package import IPIRPackage
 from app.ipir.provenance import Provenance, SourceReference
-from app.ipir.enums import ProvenanceSourceType
 
 
 class ExcelPricingAdapter(PricingSourceAdapter):

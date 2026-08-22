@@ -1,0 +1,20 @@
+from datetime import datetime, timezone
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class AssuranceJob(BaseModel):
+    """Strongly typed job message schema for Pub/Sub assurance execution."""
+
+    job_id: str
+    run_id: str
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    left_source_id: str | None = None
+    right_source_id: str | None = None
+    left_package_id: str | None = None
+    right_package_id: str | None = None
+    include_portfolio_analysis: bool = True
+    requested_model: str = "gemini-3.7-flash"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+

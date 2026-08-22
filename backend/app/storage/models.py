@@ -5,6 +5,18 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class AssuranceRunStatus(str, Enum):  # noqa: UP042
+    """Workflow status for assurance run tracking."""
+
+    CREATED = "CREATED"
+    PENDING = "PENDING"
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class EvidenceType(str, Enum):  # noqa: UP042
     """Categorized evidence type for auditability and evidence lineage."""
 
@@ -51,10 +63,10 @@ class AssuranceRunRecord(BaseModel):
     run_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    status: str = "PENDING"  # PENDING, IN_PROGRESS, COMPLETED, FAILED
+    status: AssuranceRunStatus = AssuranceRunStatus.CREATED
     workflow_stage: str = "INITIATED"
-    left_package_id: str
-    right_package_id: str
+    left_package_id: str | None = None
+    right_package_id: str | None = None
     include_portfolio_analysis: bool = True
     semantic_diff_summary: dict[str, Any] = Field(default_factory=dict)
     impact_summary: dict[str, Any] = Field(default_factory=dict)
@@ -65,4 +77,7 @@ class AssuranceRunRecord(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     agent_activity: list[dict[str, Any]] = Field(default_factory=list)
-
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    decision: str | None = None
+    summary: str | None = None
+    report: Any = None
