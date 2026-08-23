@@ -1,11 +1,41 @@
 import logging
+from datetime import datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any
+
+from pydantic import BaseModel
 
 from app.storage.interfaces import BaseRunStore
 from app.storage.memory_store import InMemoryRunStore
 from app.storage.models import AssuranceRunRecord, EvidenceRecord, RunEvent
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_for_firestore(val: Any) -> Any:
+    """Recursively normalizes input objects into Firestore-supported JSON-safe native types."""
+    if val is None:
+        return None
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, Enum):
+        return val.value
+    if isinstance(val, Decimal):
+        return str(val)
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if isinstance(val, BaseModel):
+        return sanitize_for_firestore(val.model_dump(mode="json"))
+    if isinstance(val, dict):
+        return {str(k): sanitize_for_firestore(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple, set)):
+        return [sanitize_for_firestore(v) for v in val]
+    if hasattr(val, "model_dump"):
+        return sanitize_for_firestore(val.model_dump(mode="json"))
+    if hasattr(val, "__dict__"):
+        return sanitize_for_firestore(val.__dict__)
+    return str(val)
 
 
 class FirestoreRunStore(BaseRunStore):
@@ -46,7 +76,8 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 doc_ref = self._db.collection("assurance_runs").document(record.run_id)
-                doc_ref.set(record.model_dump(mode="json"))
+                clean_payload = sanitize_for_firestore(record.model_dump(mode="json"))
+                doc_ref.set(clean_payload)
             except Exception as e:
                 logger.error("Firestore error in create_run: %s", e)
                 if not self.fallback_on_error:
@@ -71,12 +102,35 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 doc_ref = self._db.collection("assurance_runs").document(record.run_id)
-                doc_ref.set(record.model_dump(mode="json"), merge=True)
+                clean_payload = sanitize_for_firestore(record.model_dump(mode="json"))
+                doc_ref.set(clean_payload, merge=True)
             except Exception as e:
                 logger.error("Firestore error in update_run: %s", e)
                 if not self.fallback_on_error:
                     raise
         return record
+
+    def list_runs(self, limit: int = 50) -> list[AssuranceRunRecord]:
+        if self._db is not None:
+            try:
+                from google.cloud import firestore
+
+                col_ref = (
+                    self._db.collection("assurance_runs")
+                    .order_by("created_at", direction=firestore.Query.DESCENDING)
+                    .limit(limit)
+                )
+                docs = col_ref.stream()
+                runs: list[AssuranceRunRecord] = []
+                for doc in docs:
+                    runs.append(AssuranceRunRecord.model_validate(doc.to_dict()))
+                if runs:
+                    return runs
+            except Exception as e:
+                logger.error("Firestore error in list_runs: %s", e)
+                if not self.fallback_on_error:
+                    raise
+        return self._fallback_store.list_runs(limit)
 
     def add_event(self, run_id: str, event: RunEvent) -> RunEvent:
         self._fallback_store.add_event(run_id, event)
@@ -88,7 +142,8 @@ class FirestoreRunStore(BaseRunStore):
                     .collection("events")
                     .document(event.event_id)
                 )
-                doc_ref.set(event.model_dump(mode="json"))
+                clean_payload = sanitize_for_firestore(event.model_dump(mode="json"))
+                doc_ref.set(clean_payload)
             except Exception as e:
                 logger.error("Firestore error in add_event: %s", e)
                 if not self.fallback_on_error:
@@ -121,7 +176,8 @@ class FirestoreRunStore(BaseRunStore):
                     .collection("evidence")
                     .document(evidence.evidence_id)
                 )
-                doc_ref.set(evidence.model_dump(mode="json"))
+                clean_payload = sanitize_for_firestore(evidence.model_dump(mode="json"))
+                doc_ref.set(clean_payload)
             except Exception as e:
                 logger.error("Firestore error in add_evidence: %s", e)
                 if not self.fallback_on_error:

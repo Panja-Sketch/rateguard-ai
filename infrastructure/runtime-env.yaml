@@ -13,4 +13,5 @@ RATEGUARD_PUBSUB_TOPIC: "assurance-runs"
 RATEGUARD_PUBSUB_SUBSCRIPTION: "assurance-worker"
 RATEGUARD_GEMINI_MODEL: "gemini-3.7-flash"
 RATEGUARD_DATA_DIR: "/app/data"
+RATEGUARD_CORS_ORIGINS: '["http://localhost:3000","https://rateguard-web-iqofutwtva-uc.a.run.app"]'
 

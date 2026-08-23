@@ -31,6 +31,11 @@ class InMemoryRunStore(BaseRunStore):
             self._runs[record.run_id] = record
             return record
 
+    def list_runs(self, limit: int = 50) -> list[AssuranceRunRecord]:
+        with self._lock:
+            runs = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+            return runs[:limit]
+
     def add_event(self, run_id: str, event: RunEvent) -> RunEvent:
         with self._lock:
             if run_id not in self._events:

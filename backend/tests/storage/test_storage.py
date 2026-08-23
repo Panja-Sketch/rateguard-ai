@@ -63,3 +63,47 @@ def test_02_firestore_run_store_fallback_in_unit_test() -> None:
     fetched = store.get_run("RUN-FS-001")
     assert fetched is not None
     assert fetched.run_id == "RUN-FS-001"
+
+
+def test_03_sanitize_for_firestore() -> None:
+    from decimal import Decimal
+
+    from app.ipir.enums import TransactionType
+    from app.storage.firestore_store import sanitize_for_firestore
+
+    nested_payload = {
+        "decimal_val": Decimal("123.4567"),
+        "enum_val": TransactionType.NEW_BUSINESS,
+        "nested_dict": {
+            "inner_decimal": Decimal("99.99"),
+            "inner_enum": EvidenceType.PORTFOLIO_EXPOSURE,
+        },
+        "nested_list": [Decimal("1.00"), TransactionType.RENEWAL],
+    }
+
+    sanitized = sanitize_for_firestore(nested_payload)
+    assert sanitized["decimal_val"] == "123.4567"
+    assert sanitized["enum_val"] == "NEW_BUSINESS"
+    assert sanitized["nested_dict"]["inner_decimal"] == "99.99"
+    assert sanitized["nested_dict"]["inner_enum"] == "PORTFOLIO_EXPOSURE"
+    assert sanitized["nested_list"] == ["1.00", "RENEWAL"]
+
+
+def test_04_list_runs_sorting_and_limit() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    store = InMemoryRunStore()
+
+    now = datetime.now(UTC)
+    run1 = AssuranceRunRecord(run_id="RUN-LIST-01", created_at=now - timedelta(seconds=10))
+    run2 = AssuranceRunRecord(run_id="RUN-LIST-02", created_at=now - timedelta(seconds=5))
+    run3 = AssuranceRunRecord(run_id="RUN-LIST-03", created_at=now)
+
+    store.create_run(run1)
+    store.create_run(run2)
+    store.create_run(run3)
+
+    listed = store.list_runs(limit=2)
+    assert len(listed) == 2
+    assert listed[0].run_id == "RUN-LIST-03"
+    assert listed[1].run_id == "RUN-LIST-02"

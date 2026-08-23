@@ -190,14 +190,24 @@ Invoke-CheckedCommand -StageName "Describing rateguard-web URL" -ScriptBlock {
 $WEB_URL = $global:WEB_URL_VAL
 Write-Host "   Public Web Dashboard URL: $WEB_URL"
 
-# 7. Update Backend CORS Config for Deployed Web Origin
+# 7. Update Backend CORS Config for Deployed Web Origin using env file
 Write-Host "`n7. Updating Backend CORS for Deployed Web Origin..."
-$CORS_JSON = "[`"http://localhost:3000`",`"$WEB_URL`"]"
+$TEMP_ENV = "infrastructure/.deploy-env.yaml"
+Copy-Item "infrastructure/runtime-env.yaml" "$TEMP_ENV" -Force
+$CORS_LINE = "RATEGUARD_CORS_ORIGINS: '[`"http://localhost:3000`",`"$WEB_URL`"]'"
+Add-Content -Path "$TEMP_ENV" -Value $CORS_LINE
+
 Invoke-CheckedCommand -StageName "CORS update" -ScriptBlock {
-  gcloud run services update rateguard-api `
+  gcloud run deploy rateguard-api `
+    --image "$BACKEND_IMAGE" `
     --region "$REGION" `
-    --update-env-vars RATEGUARD_CORS_ORIGINS=$CORS_JSON
+    --platform managed `
+    --allow-unauthenticated `
+    --service-account "$RUNTIME_SA" `
+    --env-vars-file="$TEMP_ENV"
 }
+
+Remove-Item "$TEMP_ENV" -Force -ErrorAction SilentlyContinue
 
 Write-Host "`n========================================================"
 Write-Host "DEPLOYMENT COMPLETED SUCCESSFULLY!"

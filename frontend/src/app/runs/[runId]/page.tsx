@@ -37,6 +37,8 @@ import {
   Layers,
 } from 'lucide-react';
 
+import { ApiError } from '@/lib/api/client';
+
 export default function RunDetailPage() {
   const params = useParams();
   const runId = params.runId as string;
@@ -49,6 +51,8 @@ export default function RunDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [hasFetchedFinal, setHasFetchedFinal] = useState(false);
   const [activeTab, setActiveTab] = useState<
     'semantic' | 'impact' | 'testing' | 'recon' | 'portfolio' | 'evidence' | 'agent'
   >('semantic');
@@ -59,10 +63,10 @@ export default function RunDetailPage() {
       const recordData = await getAssuranceRun(runId);
       setRunRecord(recordData);
 
-      const eventsData = await getAssuranceRunEvents(runId);
+      const eventsData = await getAssuranceRunEvents(runId).catch(() => ({ events: [] }));
       setEvents(eventsData.events || []);
 
-      if (recordData.status === 'COMPLETED') {
+      if (recordData.status === 'COMPLETED' && !hasFetchedFinal) {
         const resultData = await getAssuranceRunResult(runId);
         setReport(resultData);
 
@@ -73,29 +77,41 @@ export default function RunDetailPage() {
           setSelectedScenario(defaultScenario);
         }
 
-        const evidenceData = await getAssuranceRunEvidence(runId);
+        const evidenceData = await getAssuranceRunEvidence(runId).catch(() => ({ evidence: [] }));
         setEvidence(evidenceData.evidence || []);
+        setHasFetchedFinal(true);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+      if (err instanceof ApiError) {
+        if (err.status === 404) {
+          setNotFound(true);
+          setError(`Assurance run '${runId}' not found.`);
+        } else {
+          setError(`API Error (${err.message})`);
+        }
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setLoading(false);
     }
-  }, [runId]);
+  }, [runId, hasFetchedFinal]);
 
   useEffect(() => {
     loadData();
+  }, [loadData]);
 
-    // Poll responsible every 2 seconds while QUEUED or PROCESSING
+  useEffect(() => {
+    if (notFound || runRecord?.status === 'COMPLETED' || runRecord?.status === 'FAILED') {
+      return;
+    }
+
     const interval = setInterval(() => {
-      if (runRecord?.status === 'QUEUED' || runRecord?.status === 'PROCESSING' || !runRecord) {
-        loadData();
-      }
-    }, 2000);
+      loadData();
+    }, 2500);
 
     return () => clearInterval(interval);
-  }, [loadData, runRecord]);
+  }, [loadData, runRecord?.status, notFound]);
 
   const workflowStages = [
     { stage: 'QUEUED', label: 'Run Created' },

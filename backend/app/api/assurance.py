@@ -189,6 +189,49 @@ def create_assurance_run(req: AssuranceRunRequest, response: Response) -> dict[s
     }
 
 
+@router.get("/assurance/runs")
+def list_assurance_runs(limit: int = 50) -> dict[str, Any]:
+    """Lists assurance runs sorted newest first with summary information."""
+    from datetime import datetime
+    from enum import Enum
+
+    store = get_run_store()
+    records = store.list_runs(limit=limit)
+
+    summary_list = []
+    for r in records:
+        status_val = r.status.value if isinstance(r.status, Enum) else str(r.status)
+        created_str = (
+            r.created_at.isoformat()
+            if isinstance(r.created_at, datetime)
+            else str(r.created_at)
+        )
+        updated_str = (
+            r.updated_at.isoformat()
+            if isinstance(r.updated_at, datetime)
+            else str(r.updated_at)
+        )
+
+        summary_list.append(
+            {
+                "run_id": r.run_id,
+                "created_at": created_str,
+                "updated_at": updated_str,
+                "status": status_val,
+                "workflow_stage": r.workflow_stage,
+                "left_package_id": r.left_package_id,
+                "right_package_id": r.right_package_id,
+                "decision": r.decision,
+                "summary": r.summary,
+            }
+        )
+
+    return {
+        "runs": summary_list,
+        "count": len(summary_list),
+    }
+
+
 @router.get("/assurance/runs/{run_id}")
 def get_assurance_run(run_id: str) -> dict[str, Any]:
     """Fetches persisted assurance run state by run ID."""
@@ -256,7 +299,11 @@ def get_assurance_run_result(run_id: str, response: Response) -> dict[str, Any]:
             "summary": record.summary,
         }
 
-    return record.report.model_dump(mode="json")
+    if isinstance(record.report, dict):
+        return record.report
+    if hasattr(record.report, "model_dump"):
+        return record.report.model_dump(mode="json")
+    return dict(record.report)
 
 
 @router.get("/assurance/runs/{run_id}/evidence")

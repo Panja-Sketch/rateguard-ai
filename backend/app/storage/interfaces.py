@@ -28,6 +28,11 @@ class BaseRunStore(ABC):
         """Updates an existing assurance run record."""
         pass
 
+    @abstractmethod
+    def list_runs(self, limit: int = 50) -> list[AssuranceRunRecord]:
+        """Lists assurance runs sorted newest first (created_at descending)."""
+        pass
+
     def update_run_status(
         self,
         run_id: str,

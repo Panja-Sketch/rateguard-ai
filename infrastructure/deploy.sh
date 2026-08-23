@@ -128,11 +128,21 @@ gcloud run deploy rateguard-web \
 WEB_URL=$(gcloud run services describe rateguard-web --region "$REGION" --format "value(status.url)")
 echo "   Public Web Dashboard URL: $WEB_URL"
 
-# 7. Update Backend CORS Config for Deployed Web Origin
+# 7. Update Backend CORS Config for Deployed Web Origin using env file
 echo "\n7. Updating Backend CORS for Deployed Web Origin..."
-gcloud run services update rateguard-api \
+TEMP_ENV="infrastructure/.deploy-env.yaml"
+cp infrastructure/runtime-env.yaml "$TEMP_ENV"
+echo "RATEGUARD_CORS_ORIGINS: '[\"http://localhost:3000\",\"${WEB_URL}\"]'" >> "$TEMP_ENV"
+
+gcloud run deploy rateguard-api \
+  --image "$BACKEND_IMAGE" \
   --region "$REGION" \
-  --update-env-vars RATEGUARD_CORS_ORIGINS="[\"http://localhost:3000\",\"${WEB_URL}\"]"
+  --platform managed \
+  --allow-unauthenticated \
+  --service-account "$RUNTIME_SA" \
+  --env-vars-file="$TEMP_ENV"
+
+rm -f "$TEMP_ENV"
 
 echo "\n========================================================"
 echo "DEPLOYMENT COMPLETED SUCCESSFULLY!"

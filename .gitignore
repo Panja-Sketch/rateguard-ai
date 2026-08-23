@@ -46,6 +46,7 @@ dist/
 # Environment & Secrets
 .env
 .env.*
+*.deploy-env.yaml
 !.env.example
 !**/.env.example
 
