@@ -1,5 +1,6 @@
 from app.core.config import get_settings
 from app.storage.portfolio.bigquery_repository import BigQueryPortfolioRepository
+from app.storage.portfolio.csv_loader import load_synthetic_portfolio_csv
 from app.storage.portfolio.interfaces import BasePortfolioRepository
 from app.storage.portfolio.local_repository import LocalPortfolioRepository
 from app.storage.portfolio.models import PortfolioPolicyRecord, PortfolioSummaryStats
@@ -26,4 +27,5 @@ __all__ = [
     "ParameterizedFilter",
     "translate_predicates_to_bigquery_where",
     "get_portfolio_repository",
+    "load_synthetic_portfolio_csv",
 ]

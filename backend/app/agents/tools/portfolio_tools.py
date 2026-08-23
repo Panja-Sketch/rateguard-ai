@@ -3,7 +3,7 @@ from typing import Any
 
 from app.engines.portfolio import PortfolioAnalyzer
 from app.ipir.package import IPIRPackage
-from scripts.run_portfolio_impact_demo import load_synthetic_portfolio_csv
+from app.storage.portfolio.csv_loader import load_synthetic_portfolio_csv
 
 
 def analyze_portfolio_exposure_tool(

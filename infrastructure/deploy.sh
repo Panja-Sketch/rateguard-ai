@@ -82,7 +82,7 @@ gcloud run deploy rateguard-api \
   --platform managed \
   --allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
-  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash",RATEGUARD_DATA_DIR="/app/data"
+  --env-vars-file=./infrastructure/runtime-env.yaml
 
 API_URL=$(gcloud run services describe rateguard-api --region "$REGION" --format "value(status.url)")
 echo "   Public API URL: $API_URL"
@@ -95,7 +95,7 @@ gcloud run deploy rateguard-worker \
   --platform managed \
   --no-allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
-  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash",RATEGUARD_DATA_DIR="/app/data"
+  --env-vars-file=./infrastructure/runtime-env.yaml
 
 WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" --format "value(status.url)")
 echo "   Private Worker URL: $WORKER_URL"
