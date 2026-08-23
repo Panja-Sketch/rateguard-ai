@@ -14,6 +14,12 @@ Write-Host "========================================================"
 
 gcloud config set project "$PROJECT_ID"
 
+# 0. Resolve Project Number & Pub/Sub Service Agent
+$PROJECT_NUMBER = (gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)").Trim()
+$PUBSUB_SERVICE_AGENT = "service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
+Write-Host "   Project Number: $PROJECT_NUMBER"
+Write-Host "   Pub/Sub Service Agent: $PUBSUB_SERVICE_AGENT"
+
 # 1. Idempotent Service Account Setup & Least-Privilege IAM Roles
 Write-Host "`n1. Verifying and configuring Service Accounts..."
 
@@ -62,6 +68,15 @@ if (-not $pushSaExists) {
   Write-Host "   Pub/Sub Push Service Account exists: $PUBSUB_PUSH_SA"
 }
 
+# Grant roles/iam.serviceAccountTokenCreator to Google-managed Pub/Sub Service Agent on Push SA
+Write-Host "   Granting roles/iam.serviceAccountTokenCreator to Pub/Sub Service Agent on Push SA..."
+gcloud iam service-accounts add-iam-policy-binding "$PUBSUB_PUSH_SA" `
+  --member="serviceAccount:$PUBSUB_SERVICE_AGENT" `
+  --role="roles/iam.serviceAccountTokenCreator" | Out-Null
+
+# Note on actAs requirement for deployer
+Write-Host "   [IAM Verification] Deployer identity must hold roles/iam.serviceAccountUser on $PUBSUB_PUSH_SA to execute modify-push-config."
+
 # 2. Deploy Public API Cloud Run Service (rateguard-api)
 Write-Host "`n2. Deploying Public API Service (rateguard-api)..."
 gcloud run deploy rateguard-api `
@@ -101,14 +116,14 @@ gcloud pubsub subscriptions modify-push-config assurance-worker `
   --push-endpoint="${WORKER_URL}/internal/pubsub/assurance" `
   --push-auth-service-account="$PUBSUB_PUSH_SA"
 
-# 5. Build and Deploy Next.js Frontend with Embedded API URL (rateguard-web)
+# 5. Build and Deploy Next.js Frontend with Embedded Build-Time API URL (rateguard-web)
 Write-Host "`n5. Building and Deploying Frontend Web Dashboard (rateguard-web)..."
 gcloud builds submit ./frontend `
-  --tag "gcr.io/$PROJECT_ID/rateguard-web:latest" `
-  --substitutions "_NEXT_PUBLIC_RATEGUARD_API_URL=$API_URL"
+  --config=./frontend/cloudbuild.yaml `
+  --substitutions=_NEXT_PUBLIC_RATEGUARD_API_URL="$API_URL"
 
 gcloud run deploy rateguard-web `
-  --image "gcr.io/$PROJECT_ID/rateguard-web:latest" `
+  --image "$REGION-docker.pkg.dev/$PROJECT_ID/rateguard/rateguard-web:latest" `
   --region "$REGION" `
   --platform managed `
   --allow-unauthenticated
@@ -118,9 +133,10 @@ Write-Host "   Public Web Dashboard URL: $WEB_URL"
 
 # 6. Update Backend CORS Config for Deployed Web Origin
 Write-Host "`n6. Updating Backend CORS for Deployed Web Origin..."
+$CORS_JSON = "[`"http://localhost:3000`",`"$WEB_URL`"]"
 gcloud run services update rateguard-api `
   --region "$REGION" `
-  --update-env-vars RATEGUARD_CORS_ORIGINS="[`"http://localhost:3000`",`"${WEB_URL}`"]"
+  --update-env-vars RATEGUARD_CORS_ORIGINS=$CORS_JSON
 
 Write-Host "`n========================================================"
 Write-Host "DEPLOYMENT COMPLETED SUCCESSFULLY!"

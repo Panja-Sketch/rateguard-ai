@@ -12,7 +12,13 @@ from app.agents.semantic_agent import SemanticAssuranceAgent
 from app.agents.test_planner_agent import TestPlannerAgent
 from app.ipir.package import IPIRPackage
 from app.storage import BaseRunStore, get_run_store
-from app.storage.models import AssuranceRunRecord, EvidenceRecord, EvidenceType, RunEvent
+from app.storage.models import (
+    AssuranceRunRecord,
+    AssuranceRunStatus,
+    EvidenceRecord,
+    EvidenceType,
+    RunEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +318,7 @@ class RateGuardOrchestrator:
         evidence_ids.append(ev_decision.evidence_id)
 
         # Update Final Run Record in Storage
-        run_record.status = "COMPLETED"
+        run_record.status = AssuranceRunStatus.COMPLETED
         run_record.workflow_stage = "FINISHED"
         run_record.semantic_diff_summary = sem_data
         run_record.impact_summary = impact_data

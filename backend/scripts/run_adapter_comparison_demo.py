@@ -6,8 +6,8 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.adapters import SourceDescriptor, SourceFormat, get_adapter_registry
-from app.engines.diff import compare_packages
+from app.adapters import SourceDescriptor, SourceFormat, get_adapter_registry  # noqa: E402
+from app.engines.diff import compare_packages  # noqa: E402
 
 
 def main() -> None:

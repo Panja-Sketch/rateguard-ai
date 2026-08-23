@@ -6,9 +6,9 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.adapters import SourceDescriptor, SourceFormat, get_adapter_registry
-from app.agents import AgenticAssuranceRunner
-from app.storage import InMemoryRunStore
+from app.adapters import SourceDescriptor, SourceFormat, get_adapter_registry  # noqa: E402
+from app.agents import AgenticAssuranceRunner  # noqa: E402
+from app.storage import InMemoryRunStore  # noqa: E402
 
 
 def main() -> None:

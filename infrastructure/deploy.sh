@@ -15,6 +15,12 @@ echo "========================================================"
 
 gcloud config set project "$PROJECT_ID"
 
+# 0. Resolve Project Number & Pub/Sub Service Agent
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+PUBSUB_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
+echo "   Project Number: $PROJECT_NUMBER"
+echo "   Pub/Sub Service Agent: $PUBSUB_SERVICE_AGENT"
+
 # 1. Idempotent Service Account Setup & Least-Privilege IAM Roles
 echo "\n1. Verifying and configuring Service Accounts..."
 
@@ -52,6 +58,15 @@ if ! gcloud iam service-accounts describe "$PUBSUB_PUSH_SA" >/dev/null 2>&1; the
 else
   echo "   Pub/Sub Push Service Account exists: $PUBSUB_PUSH_SA"
 fi
+
+# Grant roles/iam.serviceAccountTokenCreator to Google-managed Pub/Sub Service Agent on Push SA
+echo "   Granting roles/iam.serviceAccountTokenCreator to Pub/Sub Service Agent on Push SA..."
+gcloud iam service-accounts add-iam-policy-binding "$PUBSUB_PUSH_SA" \
+  --member="serviceAccount:$PUBSUB_SERVICE_AGENT" \
+  --role="roles/iam.serviceAccountTokenCreator" >/dev/null
+
+# Note on actAs requirement for deployer
+echo "   [IAM Verification] Deployer identity must hold roles/iam.serviceAccountUser on $PUBSUB_PUSH_SA to execute modify-push-config."
 
 # 2. Deploy Public API Cloud Run Service (rateguard-api)
 echo "\n2. Deploying Public API Service (rateguard-api)..."
@@ -92,14 +107,14 @@ gcloud pubsub subscriptions modify-push-config assurance-worker \
   --push-endpoint="${WORKER_URL}/internal/pubsub/assurance" \
   --push-auth-service-account="$PUBSUB_PUSH_SA"
 
-# 5. Build and Deploy Next.js Frontend with Embedded API URL (rateguard-web)
+# 5. Build and Deploy Next.js Frontend with Embedded Build-Time API URL (rateguard-web)
 echo "\n5. Building and Deploying Frontend Web Dashboard (rateguard-web)..."
 gcloud builds submit ./frontend \
-  --tag "gcr.io/$PROJECT_ID/rateguard-web:latest" \
-  --substitutions "_NEXT_PUBLIC_RATEGUARD_API_URL=$API_URL"
+  --config=./frontend/cloudbuild.yaml \
+  --substitutions=_NEXT_PUBLIC_RATEGUARD_API_URL="$API_URL"
 
 gcloud run deploy rateguard-web \
-  --image "gcr.io/$PROJECT_ID/rateguard-web:latest" \
+  --image "${REGION}-docker.pkg.dev/${PROJECT_ID}/rateguard/rateguard-web:latest" \
   --region "$REGION" \
   --platform managed \
   --allow-unauthenticated

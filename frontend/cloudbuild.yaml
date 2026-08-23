@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_RATEGUARD_API_URL=${_NEXT_PUBLIC_RATEGUARD_API_URL}'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/rateguard/rateguard-web:latest'
+      - '.'
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/rateguard/rateguard-web:latest'
+substitutions:
+  _NEXT_PUBLIC_RATEGUARD_API_URL: 'http://localhost:8000'
