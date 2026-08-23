@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.core.config import get_data_dir
 from app.storage.artifacts.interfaces import BaseArtifactStore
 from app.storage.artifacts.models import ArtifactCategory, ArtifactDescriptor
 
@@ -9,8 +10,8 @@ class LocalArtifactStore(BaseArtifactStore):
 
     def __init__(self, base_dir: Path | None = None) -> None:
         if base_dir is None:
-            root_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-            base_dir = root_dir / "data" / "artifacts"
+            data_dir = get_data_dir()
+            base_dir = data_dir / "artifacts"
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._descriptors: dict[str, ArtifactDescriptor] = {}

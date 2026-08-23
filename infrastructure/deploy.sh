@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Automated RateGuard Cloud Deployment & Multi-Service Architecture Configuration Script
 
-set -e
+set -euo pipefail
 
 PROJECT_ID="rateguard-ai"
 REGION="us-central1"
 RUNTIME_SA="rateguard-runtime@rateguard-ai.iam.gserviceaccount.com"
 PUBSUB_PUSH_SA="rateguard-pubsub-push@rateguard-ai.iam.gserviceaccount.com"
+BACKEND_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/rateguard/rateguard-api:latest"
 
 echo "========================================================"
 echo "   RateGuard AI -- Production Cloud Deployment          "
@@ -68,28 +69,33 @@ gcloud iam service-accounts add-iam-policy-binding "$PUBSUB_PUSH_SA" \
 # Note on actAs requirement for deployer
 echo "   [IAM Verification] Deployer identity must hold roles/iam.serviceAccountUser on $PUBSUB_PUSH_SA to execute modify-push-config."
 
-# 2. Deploy Public API Cloud Run Service (rateguard-api)
-echo "\n2. Deploying Public API Service (rateguard-api)..."
+# 2. Build Backend Docker Container via Cloud Build (Repository Root Context)
+echo "\n2. Building Backend Docker Container via Cloud Build..."
+gcloud builds submit . \
+  --config=./backend/cloudbuild.yaml
+
+# 3. Deploy Public API Cloud Run Service (rateguard-api)
+echo "\n3. Deploying Public API Service (rateguard-api)..."
 gcloud run deploy rateguard-api \
-  --source ./backend \
+  --image "$BACKEND_IMAGE" \
   --region "$REGION" \
   --platform managed \
   --allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
-  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash"
+  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash",RATEGUARD_DATA_DIR="/app/data"
 
 API_URL=$(gcloud run services describe rateguard-api --region "$REGION" --format "value(status.url)")
 echo "   Public API URL: $API_URL"
 
-# 3. Deploy Private Worker Cloud Run Service (rateguard-worker)
-echo "\n3. Deploying Private Worker Service (rateguard-worker)..."
+# 4. Deploy Private Worker Cloud Run Service (rateguard-worker) using SAME Backend Image
+echo "\n4. Deploying Private Worker Service (rateguard-worker)..."
 gcloud run deploy rateguard-worker \
-  --source ./backend \
+  --image "$BACKEND_IMAGE" \
   --region "$REGION" \
   --platform managed \
   --no-allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
-  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash"
+  --set-env-vars RATEGUARD_GOOGLE_CLOUD_PROJECT="$PROJECT_ID",RATEGUARD_GOOGLE_CLOUD_REGION="$REGION",RATEGUARD_GCS_BUCKET="rateguard-ai-artifacts",RATEGUARD_FIRESTORE_DATABASE="(default)",RATEGUARD_RUN_STORE="firestore",RATEGUARD_ARTIFACT_STORE="gcs",RATEGUARD_BIGQUERY_ENABLED="true",RATEGUARD_BIGQUERY_DATASET="rateguard",RATEGUARD_BIGQUERY_PORTFOLIO_TABLE="synthetic_policies",RATEGUARD_BIGQUERY_RESULTS_TABLE="portfolio_exposure_results",RATEGUARD_ASYNC_ENABLED="true",RATEGUARD_PUBSUB_TOPIC="assurance-runs",RATEGUARD_PUBSUB_SUBSCRIPTION="assurance-worker",RATEGUARD_GEMINI_MODEL="gemini-3.7-flash",RATEGUARD_DATA_DIR="/app/data"
 
 WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" --format "value(status.url)")
 echo "   Private Worker URL: $WORKER_URL"
@@ -101,14 +107,14 @@ gcloud run services add-iam-policy-binding rateguard-worker \
   --member="serviceAccount:$PUBSUB_PUSH_SA" \
   --role="roles/run.invoker" >/dev/null
 
-# 4. Configure Pub/Sub Subscription Push to Private Worker Endpoint
-echo "\n4. Configuring Pub/Sub Subscription ('assurance-worker') Push to Private Worker..."
+# 5. Configure Pub/Sub Subscription Push to Private Worker Endpoint
+echo "\n5. Configuring Pub/Sub Subscription ('assurance-worker') Push to Private Worker..."
 gcloud pubsub subscriptions modify-push-config assurance-worker \
   --push-endpoint="${WORKER_URL}/internal/pubsub/assurance" \
   --push-auth-service-account="$PUBSUB_PUSH_SA"
 
-# 5. Build and Deploy Next.js Frontend with Embedded Build-Time API URL (rateguard-web)
-echo "\n5. Building and Deploying Frontend Web Dashboard (rateguard-web)..."
+# 6. Build and Deploy Next.js Frontend with Embedded Build-Time API URL (rateguard-web)
+echo "\n6. Building and Deploying Frontend Web Dashboard (rateguard-web)..."
 gcloud builds submit ./frontend \
   --config=./frontend/cloudbuild.yaml \
   --substitutions=_NEXT_PUBLIC_RATEGUARD_API_URL="$API_URL"
@@ -122,8 +128,8 @@ gcloud run deploy rateguard-web \
 WEB_URL=$(gcloud run services describe rateguard-web --region "$REGION" --format "value(status.url)")
 echo "   Public Web Dashboard URL: $WEB_URL"
 
-# 6. Update Backend CORS Config for Deployed Web Origin
-echo "\n6. Updating Backend CORS for Deployed Web Origin..."
+# 7. Update Backend CORS Config for Deployed Web Origin
+echo "\n7. Updating Backend CORS for Deployed Web Origin..."
 gcloud run services update rateguard-api \
   --region "$REGION" \
   --update-env-vars RATEGUARD_CORS_ORIGINS="[\"http://localhost:3000\",\"${WEB_URL}\"]"
@@ -134,5 +140,6 @@ echo "Public API Service:      $API_URL"
 echo "Private Worker Service:  $WORKER_URL"
 echo "Public Web Dashboard:    $WEB_URL"
 echo "Pub/Sub Push Endpoint:   ${WORKER_URL}/internal/pubsub/assurance"
+echo "Backend Image:           $BACKEND_IMAGE"
 echo "Gemini Model:            gemini-3.7-flash"
 echo "========================================================"

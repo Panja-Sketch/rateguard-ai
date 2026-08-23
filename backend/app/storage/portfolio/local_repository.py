@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from app.core.config import get_data_dir
 from app.engines.impact.models import ImpactPredicate
 from app.engines.portfolio.models import PortfolioExposureResult
 from app.ipir.enums import TransactionType
@@ -16,8 +17,8 @@ class LocalPortfolioRepository(BasePortfolioRepository):
 
     def __init__(self, csv_file_path: Path | None = None) -> None:
         if csv_file_path is None:
-            root_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-            csv_file_path = root_dir / "data" / "portfolio" / "az_ho3_2026_synthetic_50k.csv"
+            data_dir = get_data_dir()
+            csv_file_path = data_dir / "portfolio" / "az_ho3_2026_synthetic_50k.csv"
         self.csv_file_path = csv_file_path
         self._saved_results: dict[str, PortfolioExposureResult] = {}
 

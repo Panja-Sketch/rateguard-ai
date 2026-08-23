@@ -1,6 +1,5 @@
 import logging
 import uuid
-from pathlib import Path
 
 from app.agents.assurance_agent import AssuranceDecisionAgent
 from app.agents.config import get_agent_config
@@ -10,6 +9,7 @@ from app.agents.portfolio_agent import PortfolioAgent
 from app.agents.schemas import AgenticAssuranceResult, AgentStepLog
 from app.agents.semantic_agent import SemanticAssuranceAgent
 from app.agents.test_planner_agent import TestPlannerAgent
+from app.core.config import get_data_dir
 from app.ipir.package import IPIRPackage
 from app.storage import BaseRunStore, get_run_store
 from app.storage.models import (
@@ -244,8 +244,8 @@ class RateGuardOrchestrator:
                 "PortfolioAgent",
                 "Evaluating 50,000 policy portfolio",
             )
-            root_dir = Path(__file__).resolve().parent.parent.parent.parent
-            default_csv = root_dir / "data" / "portfolio" / "az_ho3_2026_synthetic_50k.csv"
+            data_dir = get_data_dir()
+            default_csv = data_dir / "portfolio" / "az_ho3_2026_synthetic_50k.csv"
             target_csv = portfolio_csv_path or str(default_csv)
 
             port_res = self.portfolio_agent.run(target_csv, left_json, right_json)

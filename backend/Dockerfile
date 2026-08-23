@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pyproject.toml and source files
-COPY pyproject.toml .
-COPY app ./app
+# Copy pyproject.toml and source files from repository root build context
+COPY backend/pyproject.toml ./pyproject.toml
+COPY backend/app ./app
 COPY data ./data
 
 # Install Python package dependencies

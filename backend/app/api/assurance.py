@@ -1,5 +1,4 @@
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -7,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.agents import AgenticAssuranceRunner
 from app.api.sources import _registered_sources
-from app.core.config import get_settings
+from app.core.config import get_data_dir, get_settings
 from app.ipir.package import IPIRPackage
 from app.messaging import AssuranceJob, get_message_publisher
 from app.services.ingestion_service import PricingSourceIngestionService
@@ -20,11 +19,11 @@ _ingestion_service = PricingSourceIngestionService()
 class AssuranceRunRequest(BaseModel):
     """Request payload for starting an autonomous pricing assurance workflow."""
 
-    left_package_id: str | None = Field(
-        default="AZ_HO3_2026_09", description="Canonical IPIR rate plan ID"
+    left_package_id: str = Field(
+        default="AZ_HO3_2026_09", description="Canonical spec/package identifier"
     )
-    right_package_id: str | None = Field(
-        default="AZ_HO3_2026_09_DEFECTIVE", description="Target engine implementation ID"
+    right_package_id: str = Field(
+        default="AZ_HO3_2026_09_DEFECTIVE", description="Target spec/package identifier"
     )
     left_source_id: str | None = Field(
         default=None, description="Optional registered source ID for left pricing model"
@@ -33,7 +32,7 @@ class AssuranceRunRequest(BaseModel):
         default=None, description="Optional registered source ID for right pricing model"
     )
     include_portfolio_analysis: bool = Field(
-        default=True, description="Enable 50,000 policy portfolio blast radius analysis"
+        default=True, description="Include 50K portfolio exposure analysis"
     )
     portfolio_csv_path: str | None = Field(
         default=None, description="Optional custom synthetic portfolio CSV path"
@@ -45,12 +44,12 @@ class AssuranceRunRequest(BaseModel):
 
 def resolve_demo_package(package_id: str) -> IPIRPackage:
     """Resolves allowed demo package IDs safely without exposing arbitrary filesystem paths."""
-    root_dir = Path(__file__).resolve().parent.parent.parent.parent
+    data_dir = get_data_dir()
     canonical_file = (
-        root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+        data_dir / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
     )
     defective_file = (
-        root_dir / "data" / "implementations" / "defective" / "AZ_HO3_2026_09_ipir.json"
+        data_dir / "implementations" / "defective" / "AZ_HO3_2026_09_ipir.json"
     )
 
     if package_id == "AZ_HO3_2026_09":

@@ -1,12 +1,12 @@
 import io
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import openpyxl
 
 from app.adapters.base import PricingSourceAdapter
 from app.adapters.models import AdapterResult, SourceDescriptor, SourceFormat
+from app.core.config import get_data_dir
 from app.ipir.enums import ProvenanceSourceType
 from app.ipir.package import IPIRPackage
 from app.ipir.provenance import Provenance, SourceReference
@@ -29,9 +29,9 @@ class ExcelPricingAdapter(PricingSourceAdapter):
 
         # 2. To ensure 100% semantic fidelity with sheet/row provenance tracking,
         # we read the underlying JSON source reference or construct canonical package from workbook.
-        root_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
+        data_dir = get_data_dir()
         canonical_file = (
-            root_dir / "data" / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
+            data_dir / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
         )
 
         with open(canonical_file, encoding="utf-8") as f:
