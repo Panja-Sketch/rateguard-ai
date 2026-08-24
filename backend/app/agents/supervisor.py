@@ -539,7 +539,7 @@ class AssuranceSupervisor:
         from app.storage.models import AssuranceRunRecord, AssuranceRunStatus
         return AssuranceRunRecord(
             run_id=mission.mission_id,
-            status=AssuranceRunStatus.PROCESSING,
+            status=AssuranceRunStatus.RUNNING,
             workflow_stage="RUNNING",
             left_package_id=mission.source_a.source_id,
             right_package_id=mission.source_b.source_id if mission.source_b else None,
@@ -555,9 +555,15 @@ class AssuranceSupervisor:
         if mission.status == MissionStatus.COMPLETED:
             rec.status = AssuranceRunStatus.COMPLETED
             rec.workflow_stage = "FINISHED"
+        elif mission.status == MissionStatus.NEEDS_REVIEW:
+            rec.status = AssuranceRunStatus.NEEDS_REVIEW
+            rec.workflow_stage = "NEEDS_REVIEW"
         elif mission.status == MissionStatus.FAILED:
             rec.status = AssuranceRunStatus.FAILED
             rec.workflow_stage = "FAILED"
+        else:
+            rec.status = AssuranceRunStatus(mission.status.value)
+            rec.workflow_stage = mission.status.value
 
         rec.decision = result.release_decision.data.status if result.release_decision.data else "UNKNOWN"
         rec.summary = result.release_decision.data.summary if result.release_decision.data else "Mission executed."

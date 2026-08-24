@@ -1,8 +1,11 @@
+import base64
+import json
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.messaging.models import AssuranceJob
 from app.models.mission import (
     AssuranceMission,
     ComparisonMode,
@@ -16,6 +19,7 @@ from app.models.result_v2 import (
     BlastRadiusResult,
     SectionResult,
 )
+from app.services.mission_execution_service import MissionExecutionService
 from app.storage import AssuranceRunRecord, AssuranceRunStatus, get_run_store
 from app.storage.firestore_store import sanitize_for_firestore
 
@@ -52,6 +56,29 @@ def test_async_mission_creation_returns_202_fast():
     assert "status_url" in data
 
 
+def test_immediate_get_mission_returns_queued_record_without_memory_sharing():
+    """Proves POST mission immediately persists QUEUED record readable across GET endpoint."""
+    payload = {
+        "name": "Immediate Persistence Verification",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Spec"},
+        "source_b": {"source_id": "AZ_HO3_2026_09_CLEAN", "source_type": "SAMPLE_RELEASE", "name": "Target"},
+    }
+
+    res = client.post("/api/v1/missions", json=payload)
+    assert res.status_code == 202
+    mission_id = res.json()["mission_id"]
+
+    # GET detail must return 200 OK QUEUED immediately from durable store
+    get_res = client.get(f"/api/v1/missions/{mission_id}")
+    assert get_res.status_code == 200
+    data = get_res.json()
+    assert data["mission_id"] == mission_id
+    assert data["status"] in ("QUEUED", "RUNNING", "COMPLETED")
+
+
 def test_pubsub_publish_failure_returns_503_without_local_execution():
     """Proves Pub/Sub publishing failure returns HTTP 503 MISSION_QUEUE_UNAVAILABLE and does NOT execute in API process."""
     payload = {
@@ -73,12 +100,76 @@ def test_pubsub_publish_failure_returns_503_without_local_execution():
         assert data["code"] == "MISSION_QUEUE_UNAVAILABLE"
         assert "mission_id" in data
 
-        # Confirm persisted mission record reflects queue failure
         store = get_run_store()
         rec = store.get_run(data["mission_id"])
         assert rec is not None
         assert rec.workflow_stage == "QUEUE_FAILED"
         assert rec.metadata.get("error_code") == "MISSION_QUEUE_UNAVAILABLE"
+
+
+def test_distributed_mission_execution_path():
+    """Simulates complete cross-process distributed Pub/Sub worker execution path."""
+    payload = {
+        "name": "Distributed Execution Test Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Spec"},
+        "source_b": {"source_id": "AZ_HO3_2026_09_CLEAN", "source_type": "SAMPLE_RELEASE", "name": "Target"},
+        "disposable_sample_run": True,
+    }
+
+    # 1. API creates mission
+    post_res = client.post("/api/v1/missions", json=payload)
+    assert post_res.status_code == 202
+    mission_id = post_res.json()["mission_id"]
+
+    # 2. Serialize AssuranceJob to Pub/Sub envelope as Cloud Pub/Sub does
+    job = AssuranceJob(
+        job_id=f"JOB-{mission_id}",
+        run_id=mission_id,
+        job_type="ASSURANCE_MISSION_V2",
+        schema_version=2,
+        left_source_id="AZ_HO3_2026_09",
+        right_source_id="AZ_HO3_2026_09_CLEAN",
+        left_package_id="AZ_HO3_2026_09",
+        right_package_id="AZ_HO3_2026_09_CLEAN",
+    )
+    b64_data = base64.b64encode(json.dumps(job.model_dump(mode="json")).encode("utf-8")).decode("utf-8")
+    envelope = {"message": {"data": b64_data, "message_id": "MSG-TEST-100"}}
+
+    # 4. Worker processes envelope via /internal/pubsub/assurance endpoint
+    pub_res = client.post("/internal/pubsub/assurance", json=envelope)
+    assert pub_res.status_code == 200
+    assert pub_res.json()["status"] == "ACKNOWLEDGED"
+
+    # 5. Detail GET endpoint returns completed status and PASS decision
+    get_res = client.get(f"/api/v1/missions/{mission_id}")
+    assert get_res.status_code == 200
+    detail = get_res.json()
+    assert detail["status"] in ("COMPLETED", "FINISHED")
+    assert detail["decision"] == "PASS"
+
+
+def test_execution_lease_skips_duplicate_delivery():
+    """Proves duplicate Pub/Sub delivery safely skips re-execution when mission is completed."""
+    job = AssuranceJob(
+        job_id="JOB-DUP-100",
+        run_id="MIS-DUP-100",
+        job_type="ASSURANCE_MISSION_V2",
+    )
+
+    store = get_run_store()
+    rec = AssuranceRunRecord(
+        run_id="MIS-DUP-100",
+        status=AssuranceRunStatus.COMPLETED,
+        workflow_stage="FINISHED",
+        decision="PASS",
+    )
+    store.save_run(rec)
+
+    res = MissionExecutionService.execute_job(job)
+    assert res["status"] == "SKIPPED_ALREADY_COMPLETED"
 
 
 def test_invalid_mission_creation_returns_400_without_enqueuing():
@@ -88,7 +179,6 @@ def test_invalid_mission_creation_returns_400_without_enqueuing():
         "mode": "RUNTIME_VERIFICATION",
         "product": "AZ_HO3",
         "jurisdiction": "Arizona",
-        # Missing required runtime_connector
         "runtime_connector": None,
     }
 

@@ -17,8 +17,10 @@ class InMemoryRunStore(BaseRunStore):
     def create_run(self, record: AssuranceRunRecord) -> AssuranceRunRecord:
         with self._lock:
             self._runs[record.run_id] = record
-            self._events[record.run_id] = []
-            self._evidence[record.run_id] = []
+            if record.run_id not in self._events:
+                self._events[record.run_id] = []
+            if record.run_id not in self._evidence:
+                self._evidence[record.run_id] = []
             return record
 
     def get_run(self, run_id: str) -> AssuranceRunRecord | None:

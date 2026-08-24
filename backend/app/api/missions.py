@@ -157,6 +157,9 @@ def create_assurance_mission(
     job = AssuranceJob(
         job_id=f"JOB-{mission_id}",
         run_id=mission_id,
+        job_type="ASSURANCE_MISSION_V2",
+        schema_version=2,
+        correlation_id=correlation_id,
         left_source_id=req.source_a.source_id,
         right_source_id=req.source_b.source_id if req.source_b else None,
         left_package_id=req.source_a.source_id,

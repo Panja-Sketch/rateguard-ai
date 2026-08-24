@@ -90,9 +90,10 @@ class FirestoreRunStore(BaseRunStore):
                 doc_ref = self._db.collection("assurance_runs").document(run_id)
                 doc = doc_ref.get()
                 if doc.exists:
-                    return AssuranceRunRecord.model_validate(doc.to_dict())
+                    data = doc.to_dict()
+                    return AssuranceRunRecord.model_validate(data)
             except Exception as e:
-                logger.error("Firestore error in get_run: %s", e)
+                logger.error("Firestore get_run error for '%s': %s", run_id, e)
                 if not self.fallback_on_error:
                     raise
         return self._fallback_store.get_run(run_id)

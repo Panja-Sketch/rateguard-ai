@@ -49,15 +49,27 @@ export default function MissionDetailPage() {
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const data = await getAssuranceMission(missionId);
-      setMissionData(data);
-      setConsecutiveErrors(0);
-    } catch (err: unknown) {
+      let attempts = 0;
+      let lastErr: any = null;
+      while (attempts < 3) {
+        try {
+          const data = await getAssuranceMission(missionId);
+          setMissionData(data);
+          setConsecutiveErrors(0);
+          return;
+        } catch (err) {
+          lastErr = err;
+          attempts++;
+          if (attempts < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 400));
+          }
+        }
+      }
       setConsecutiveErrors((prev) => prev + 1);
-      if (err instanceof ApiError) {
-        setError(`API Error (${err.message})`);
+      if (lastErr instanceof ApiError) {
+        setError(`API Error (${lastErr.message})`);
       } else {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(lastErr instanceof Error ? lastErr.message : String(lastErr));
       }
     } finally {
       setLoading(false);

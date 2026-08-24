@@ -188,14 +188,15 @@ The application utilizes **Google ADK (Agent Development Kit)** with **Gemini** 
 
 - **Frontend:** Next.js / React (TypeScript, Tailwind CSS)
 - **Backend:** Python 3.12+ with FastAPI & Pydantic v2
-- **Agentic Framework:** Google ADK (Agent Development Kit)
-- **LLM / Foundation Models:** Gemini 3.5 / 3.6 Flash & Pro via Google GenAI SDK / Vertex AI (configurable)
+- **Agentic Framework:** Google ADK (Agent Development Kit) & AssuranceSupervisor
+- **LLM / Foundation Models:** Gemini 3.7 Flash via Google GenAI SDK / Vertex AI
 - **Cloud Infrastructure & Storage:**
-  - **Runtime:** Cloud Run (Docker containers)
-  - **State & Workflow Metadata:** Cloud Firestore
-  - **Portfolio Analytics:** BigQuery
+  - **Runtime:** Cloud Run (Public API service `rateguard-api` with `--memory=512Mi` & Private Worker service `rateguard-worker` with `--memory=1Gi`)
+  - **Distributed Architecture:** API validates request synchronously (<50ms), persists QUEUED record to Firestore, and publishes `AssuranceJob` V2 message (`job_type: "ASSURANCE_MISSION_V2"`) to Cloud Pub/Sub topic `assurance-runs`. Cloud Pub/Sub push subscription `assurance-worker` delivers payload to private worker endpoint `POST /internal/pubsub/assurance`.
+  - **Authoritative Execution Service:** `MissionExecutionService` loads mission from durable storage, acquires atomic execution lease, and invokes `AssuranceSupervisor` 10-stage pipeline asynchronously.
+  - **State & Workflow Metadata:** Cloud Firestore (`assurance_runs` collection natively supporting Mission V2 statuses: `DRAFT`, `VALIDATING`, `QUEUED`, `RUNNING`, `WAITING_RETRY`, `NEEDS_REVIEW`, `COMPLETED`, `FAILED`, `CANCELLED`, `ARCHIVED`).
+  - **Portfolio Analytics:** BigQuery (Authoritative 50K policy dataset)
   - **Evidence & Document Storage:** Cloud Storage (GCS)
-  - **Async Processing:** Cloud Pub/Sub
 - **Version Control:** GitHub
 
 ---

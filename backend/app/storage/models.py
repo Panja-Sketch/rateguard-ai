@@ -6,15 +6,22 @@ from pydantic import BaseModel, Field
 
 
 class AssuranceRunStatus(str, Enum):  # noqa: UP042
-    """Workflow status for assurance run tracking."""
+    """Workflow status for assurance run tracking supporting both legacy and V2 lifecycle."""
 
+    DRAFT = "DRAFT"
+    VALIDATING = "VALIDATING"
     CREATED = "CREATED"
     PENDING = "PENDING"
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
+    RUNNING = "RUNNING"
     IN_PROGRESS = "IN_PROGRESS"
+    WAITING_RETRY = "WAITING_RETRY"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    ARCHIVED = "ARCHIVED"
 
 
 class EvidenceType(str, Enum):  # noqa: UP042
@@ -51,8 +58,8 @@ class RunEvent(BaseModel):
     event_id: str
     run_id: str
     stage: str
-    agent_name: str
-    action: str
+    agent_name: str = "AssuranceWorker"
+    action: str = "STAGE_CHANGED"
     details: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -63,8 +70,8 @@ class AssuranceRunRecord(BaseModel):
     run_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    status: AssuranceRunStatus = AssuranceRunStatus.CREATED
-    workflow_stage: str = "INITIATED"
+    status: AssuranceRunStatus = AssuranceRunStatus.QUEUED
+    workflow_stage: str = "QUEUED"
     left_package_id: str | None = None
     right_package_id: str | None = None
     include_portfolio_analysis: bool = True
