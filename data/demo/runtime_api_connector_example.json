@@ -1,0 +1,17 @@
+{
+  "connector_name": "Synthetic External Rating API",
+  "base_url": "http://localhost:8000/api/v1/demo-rating/quote",
+  "http_method": "POST",
+  "auth_type": "none",
+  "request_template": {
+    "product": "AZ_HO3",
+    "effective_date": "2026-09-15"
+  },
+  "response_mapping": {
+    "premium": "premium"
+  },
+  "timeout_seconds": 10.0,
+  "max_retries": 3,
+  "expected_premium_field": "premium"
+}
+

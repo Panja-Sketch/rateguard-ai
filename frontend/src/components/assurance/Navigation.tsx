@@ -18,9 +18,9 @@ export function Navigation() {
 
   const links = [
     { href: '/', label: 'Overview', icon: ShieldCheck },
-    { href: '/demo', label: 'Run Demo', icon: Cpu },
+    { href: '/missions/new', label: 'Start Mission', icon: Cpu },
     { href: '/sources', label: 'Sources', icon: FileCode2 },
-    { href: '/runs', label: 'Assurance Runs', icon: History },
+    { href: '/missions', label: 'Mission History', icon: History },
     { href: '/architecture', label: 'Architecture', icon: Network },
   ];
 

@@ -95,7 +95,7 @@ export function EvidenceLineage({ evidence = [], isCompleted = true }: EvidenceL
                 <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
                   <div className="flex items-center gap-1 text-[10px] font-mono text-slate-500">
                     <Clock className="h-3 w-3" />
-                    <span>{ev.created_at || ev.timestamp ? new Date(ev.created_at || ev.timestamp).toLocaleTimeString() : 'Just now'}</span>
+                    <span>{ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : 'Just now'}</span>
                   </div>
 
                   <button

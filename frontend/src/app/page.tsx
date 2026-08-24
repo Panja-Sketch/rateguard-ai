@@ -29,10 +29,10 @@ export default function HomePage() {
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-4">
             <Link
-              href="/demo"
+              href="/missions/new"
               className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-sky-600/30 hover:bg-sky-500 transition-all"
             >
-              <Cpu className="h-4 w-4" /> Run Pricing Assurance Demo <ArrowRight className="h-4 w-4" />
+              <Cpu className="h-4 w-4" /> Start Assurance Mission <ArrowRight className="h-4 w-4" />
             </Link>
             <Link
               href="/architecture"

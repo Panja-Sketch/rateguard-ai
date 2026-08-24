@@ -1,27 +1,34 @@
-import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck } from 'lucide-react';
+import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck, ArrowDown, Globe } from 'lucide-react';
 
 export default function ArchitecturePage() {
   const techStack = [
     {
       title: 'Google ADK + Gemini 3.7 Flash',
-      category: 'Agent Framework',
-      desc: 'Orchestrates multi-agent workflow, reasons across semantic diffs, generates test plans, and provides natural-language executive explanations.',
+      category: 'Agent Supervisor',
+      desc: 'Orchestrates adaptive assurance missions, interprets findings, plans probes, synthesizes root causes, and proposes remediation patches.',
       icon: Bot,
       color: 'border-sky-500/50 bg-sky-950/30 text-sky-300',
     },
     {
+      title: 'Vendor-Neutral Rating API Connector',
+      category: 'Runtime Integration',
+      desc: 'Connects external rating APIs (Guidewire, Duck Creek, Earnix, microservices) via BlackBoxRatingApiAdapter for Black-Box Runtime Verification.',
+      icon: Globe,
+      color: 'border-purple-500/50 bg-purple-950/30 text-purple-300',
+    },
+    {
       title: 'BigQuery (50K Portfolio)',
       category: 'Portfolio Analytics',
-      desc: 'Stores 50,000 synthetic carrier policies and executes high-performance SQL exposure predicate filters for financial blast radius analysis.',
+      desc: 'Stores 50,000 synthetic carrier policies and executes high-performance SQL exposure queries measuring financial blast radius.',
       icon: Database,
       color: 'border-blue-500/50 bg-blue-950/30 text-blue-300',
     },
     {
       title: 'Firestore (Native)',
       category: 'Workflow State & Audit',
-      desc: 'Persists real-time assurance run states, workflow event logs, and audit evidence records in Native mode database (default).',
+      desc: 'Persists real-time assurance mission state, event logs, and audit evidence records in Native mode database.',
       icon: Server,
-      color: 'border-purple-500/50 bg-purple-950/30 text-purple-300',
+      color: 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300',
     },
     {
       title: 'Cloud Storage (GCS)',
@@ -35,13 +42,6 @@ export default function ArchitecturePage() {
       category: 'Async Queue',
       desc: 'Delivers asynchronous assurance jobs via authenticated push subscription to Cloud Run worker endpoints for background execution.',
       icon: Cpu,
-      color: 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300',
-    },
-    {
-      title: 'Cloud Run Runtime',
-      category: 'Serverless Compute',
-      desc: 'Hosts rateguard-api, rateguard-web, and worker runtimes in us-central1 with service-account least-privilege security.',
-      icon: ShieldCheck,
       color: 'border-rose-500/50 bg-rose-950/30 text-rose-300',
     },
   ];
@@ -50,20 +50,45 @@ export default function ArchitecturePage() {
     <div className="space-y-8 max-w-5xl mx-auto">
       <div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-2">
-          <Network className="h-7 w-7 text-sky-400" /> RateGuard System Architecture
+          <Network className="h-7 w-7 text-sky-400" /> RateGuard System Architecture V2
         </h1>
         <p className="text-xs sm:text-sm text-slate-400 mt-1">
           Combining deterministic software calculation with agentic AI orchestration on Google Cloud.
         </p>
       </div>
 
+      {/* Architecture Topology Box */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-4 shadow-xl">
+        <h2 className="text-base font-bold text-white uppercase tracking-wider">
+          End-to-End System Topology & Integration Flow
+        </h2>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs text-sky-300 overflow-x-auto space-y-2 leading-relaxed">
+          <div>User Browser / Client $\rightarrow$ Next.js 14 Frontend</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ HTTP REST API</div>
+          <div>FastAPI Backend (Cloud Run API)</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ Pub/Sub Async Queue / Native Invocation</div>
+          <div>Private Worker Runtime (Cloud Run Worker)</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ Multi-Agent Orchestration</div>
+          <div className="text-purple-300 font-bold">Google ADK Assurance Supervisor $\leftrightarrow$ Gemini 3.7 Flash</div>
+          <div className="pl-4 text-slate-500 font-sans">↕ Deterministic Boundaries</div>
+          <div>Python Deterministic Engines (AST Diff, Oracle Math, Test Generator, Reconciliation)</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ External Runtime Verification</div>
+          <div className="text-emerald-300">BlackBoxRatingApiAdapter $\rightarrow$ External Rating API (HTTP/HTTPS)</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ Cloud Persistence</div>
+          <div>Firestore (RunState) | BigQuery (50K Portfolio SQL) | GCS (Artifacts)</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ Release Decision</div>
+          <div className="text-white font-bold font-sans">PASS / REVIEW_REQUIRED / BLOCK_DEPLOYMENT</div>
+        </div>
+      </div>
+
       {/* Core Principle Alert */}
       <div className="rounded-xl border border-sky-800 bg-sky-950/40 p-4 space-y-2">
         <div className="flex items-center gap-2 font-bold text-sky-300 text-sm">
-          <Lock className="h-4 w-4" /> Core Non-Negotiable Architecture Principle
+          <Lock className="h-4 w-4" /> Strict Deterministic Boundary Guarantee
         </div>
         <p className="text-xs text-sky-100 leading-relaxed">
-          Gemini and Google ADK orchestrate multi-agent workflows, reason over semantic AST diffs, and generate executive summaries. All monetary arithmetic, rate table lookups, pricing graph evaluation, test execution, and financial blast radius exposure calculations are executed exclusively by deterministic Python code using Python <code className="font-mono text-white font-bold">Decimal</code>.
+          Gemini 3.7 Flash and Google ADK plan investigation probes, reason over AST diffs, propose remediation patches, and synthesize executive summaries. All monetary arithmetic, rate table lookups, pricing graph evaluations, test executions, BigQuery SQL aggregations, and financial exposure calculations are executed exclusively by deterministic Python code using Python <code className="font-mono text-white font-bold">Decimal</code>.
         </p>
       </div>
 
@@ -90,4 +115,3 @@ export default function ArchitecturePage() {
     </div>
   );
 }
-

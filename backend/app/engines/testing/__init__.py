@@ -8,10 +8,13 @@ from app.engines.testing.optimizer import optimize_test_plan
 from app.engines.testing.planner import PricingTestPlanner
 from app.engines.testing.scorer import score_scenario
 
+RiskDirectedTestGenerator = PricingTestPlanner
+
 __all__ = [
     "PricingTestPlan",
     "PricingTestPlanner",
     "PricingTestScenario",
+    "RiskDirectedTestGenerator",
     "TestGenerationError",
     "generate_candidate_scenarios",
     "generate_range_boundary_values",
