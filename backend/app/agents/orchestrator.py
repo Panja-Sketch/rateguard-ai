@@ -320,6 +320,8 @@ class RateGuardOrchestrator:
         # Update Final Run Record in Storage
         run_record.status = AssuranceRunStatus.COMPLETED
         run_record.workflow_stage = "FINISHED"
+        run_record.decision = assurance_res["status"]
+        run_record.summary = assurance_res["executive_summary"]
         run_record.semantic_diff_summary = sem_data
         run_record.impact_summary = impact_data
         run_record.test_plan_summary = test_data
@@ -329,11 +331,10 @@ class RateGuardOrchestrator:
         run_record.evidence_refs = evidence_ids
         run_record.agent_activity = [step.model_dump(mode="json") for step in agent_steps]
 
-        self.store.update_run(run_record)
-
-        return AgenticAssuranceResult(
+        result = AgenticAssuranceResult(
             run_id=actual_run_id,
             status=assurance_res["status"],
+            decision=assurance_res["status"],
             executive_summary=assurance_res["executive_summary"],
             semantic_summary=sem_res["summary"],
             impact_summary=impact_res["summary"],
@@ -341,6 +342,12 @@ class RateGuardOrchestrator:
             root_cause_summary=recon_res["summary"],
             portfolio_summary=port_res["summary"] if port_res else "Portfolio analysis omitted.",
             recommendation=assurance_res["recommendation"],
+            blocking_reasons=assurance_res.get("blocking_reasons", []),
+            semantic_diff=sem_data,
+            impact=impact_data,
+            test_plan=test_data,
+            reconciliation=recon_data,
+            portfolio=port_data or {},
             evidence_refs=evidence_ids,
             agent_steps=agent_steps,
             confidence=1.0,
@@ -349,6 +356,11 @@ class RateGuardOrchestrator:
                 "Portfolio analysis uses synthetic risk distribution parameters.",
             ],
         )
+
+        run_record.report = result.model_dump(mode="json")
+        self.store.update_run(run_record)
+
+        return result
 
     def _log_event(self, run_id: str, stage: str, agent_name: str, action: str) -> None:
         event = RunEvent(

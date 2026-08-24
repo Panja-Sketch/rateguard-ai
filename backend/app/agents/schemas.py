@@ -11,6 +11,7 @@ class AgentStepLog(BaseModel):
     role: str
     action: str
     summary: str
+    type: str = "REASONING"  # REASONING, TOOL, WORKFLOW
     output_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -19,6 +20,7 @@ class AgenticAssuranceResult(BaseModel):
 
     run_id: str
     status: str  # PASS, REVIEW, BLOCK_DEPLOYMENT
+    decision: str = ""
     executive_summary: str
     semantic_summary: str
     impact_summary: str
@@ -26,6 +28,12 @@ class AgenticAssuranceResult(BaseModel):
     root_cause_summary: str
     portfolio_summary: str
     recommendation: str
+    blocking_reasons: list[str] = Field(default_factory=list)
+    semantic_diff: dict[str, Any] = Field(default_factory=dict)
+    impact: dict[str, Any] = Field(default_factory=dict)
+    test_plan: dict[str, Any] = Field(default_factory=dict)
+    reconciliation: dict[str, Any] = Field(default_factory=dict)
+    portfolio: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
     agent_steps: list[AgentStepLog] = Field(default_factory=list)
     confidence: float = 1.0

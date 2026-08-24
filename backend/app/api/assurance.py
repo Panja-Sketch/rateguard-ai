@@ -10,10 +10,17 @@ from app.core.config import get_data_dir, get_settings
 from app.ipir.package import IPIRPackage
 from app.messaging import AssuranceJob, get_message_publisher
 from app.services.ingestion_service import PricingSourceIngestionService
+from app.services.scenario_service import (
+    DEMO_SCENARIOS_CATALOG,
+    ScenarioLabParams,
+    build_custom_lab_package,
+    derive_scenario_package,
+)
 from app.storage import AssuranceRunRecord, AssuranceRunStatus, EvidenceRecord, get_run_store
 
 router = APIRouter(prefix="/api/v1", tags=["assurance"])
 _ingestion_service = PricingSourceIngestionService()
+_ephemeral_packages: dict[str, IPIRPackage] = {}
 
 
 class AssuranceRunRequest(BaseModel):
@@ -44,6 +51,9 @@ class AssuranceRunRequest(BaseModel):
 
 def resolve_demo_package(package_id: str) -> IPIRPackage:
     """Resolves allowed demo package IDs safely without exposing arbitrary filesystem paths."""
+    if package_id in _ephemeral_packages:
+        return _ephemeral_packages[package_id]
+
     data_dir = get_data_dir()
     canonical_file = (
         data_dir / "implementations" / "canonical" / "AZ_HO3_2026_09_ipir.json"
@@ -56,10 +66,32 @@ def resolve_demo_package(package_id: str) -> IPIRPackage:
         target_path = canonical_file
     elif package_id in ("AZ_HO3_2026_09_DEFECTIVE", "AZ_HO3_2026_09_defective"):
         target_path = defective_file
+    elif package_id in (
+        "AZ_HO3_2026_09_CLEAN",
+        "AZ_HO3_2026_09_DEDUCTIBLE_DRIFT",
+        "AZ_HO3_2026_09_EFFDATE_DRIFT",
+        "AZ_HO3_2026_09_TERRITORY_DRIFT",
+    ):
+        if not canonical_file.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Canonical package file not found at {canonical_file}",
+            )
+        with open(canonical_file, encoding="utf-8") as f:
+            canonical_pkg = IPIRPackage.model_validate_json(f.read())
+        return derive_scenario_package(package_id, canonical_pkg)
     else:
+        allowed = [
+            "AZ_HO3_2026_09",
+            "AZ_HO3_2026_09_DEFECTIVE",
+            "AZ_HO3_2026_09_CLEAN",
+            "AZ_HO3_2026_09_DEDUCTIBLE_DRIFT",
+            "AZ_HO3_2026_09_EFFDATE_DRIFT",
+            "AZ_HO3_2026_09_TERRITORY_DRIFT",
+        ]
         err_msg = (
             f"Unsupported package_id '{package_id}'. "
-            "Allowed demo packages: ['AZ_HO3_2026_09', 'AZ_HO3_2026_09_DEFECTIVE']"
+            f"Allowed demo packages: {allowed}"
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -76,6 +108,25 @@ def resolve_demo_package(package_id: str) -> IPIRPackage:
         return IPIRPackage.model_validate_json(f.read())
 
 
+@router.get("/system/info")
+def get_system_info() -> dict[str, Any]:
+    """Returns runtime system and AI model information."""
+    from app.agents.config import get_agent_config
+
+    settings = get_settings()
+    agent_config = get_agent_config()
+    return {
+        "gemini_model": agent_config.gemini_model,
+        "gemini_model_display": "Gemini 3.7 Flash",
+        "agent_framework": "Google ADK",
+        "ipir_version": "0.1",
+        "cloud_project": settings.google_cloud_project,
+        "region": settings.google_cloud_region,
+        "run_store": agent_config.run_store,
+        "bigquery_enabled": settings.bigquery_enabled,
+    }
+
+
 @router.get("/demo/packages")
 def list_demo_packages() -> dict[str, Any]:
     """Returns available synthetic demo packages for testing."""
@@ -88,10 +139,86 @@ def list_demo_packages() -> dict[str, Any]:
             },
             {
                 "id": "AZ_HO3_2026_09_DEFECTIVE",
-                "name": "Arizona Homeowners HO3 Rate Plan (Defective Implementation)",
+                "name": "Arizona Homeowners HO3 Rate Plan (Defective Multi-Defect Target)",
                 "type": "DEFECTIVE_TARGET",
             },
+            {
+                "id": "AZ_HO3_2026_09_CLEAN",
+                "name": "Arizona Homeowners HO3 Rate Plan (Compliant / Clean Target)",
+                "type": "CLEAN_TARGET",
+            },
+            {
+                "id": "AZ_HO3_2026_09_DEDUCTIBLE_DRIFT",
+                "name": "Arizona Homeowners HO3 Rate Plan (Deductible Drift Target)",
+                "type": "DEDUCTIBLE_DRIFT_TARGET",
+            },
+            {
+                "id": "AZ_HO3_2026_09_EFFDATE_DRIFT",
+                "name": "Arizona Homeowners HO3 Rate Plan (Effective Date Drift Target)",
+                "type": "EFFDATE_DRIFT_TARGET",
+            },
+            {
+                "id": "AZ_HO3_2026_09_TERRITORY_DRIFT",
+                "name": "Arizona Homeowners HO3 Rate Plan (Territory Drift Target)",
+                "type": "TERRITORY_DRIFT_TARGET",
+            },
         ]
+    }
+
+
+@router.get("/demo/scenarios")
+def list_demo_scenarios() -> dict[str, Any]:
+    """Returns ready-to-run assurance scenarios for judge demonstration."""
+    return {
+        "scenarios": DEMO_SCENARIOS_CATALOG,
+        "count": len(DEMO_SCENARIOS_CATALOG),
+    }
+
+
+@router.post("/assurance/scenario-lab")
+def create_scenario_lab_run(
+    params: ScenarioLabParams, response: Response
+) -> dict[str, Any]:
+    """Dynamically creates an ephemeral target package from Scenario Lab parameters and launches assurance."""
+    canonical_pkg = resolve_demo_package("AZ_HO3_2026_09")
+    lab_package_id = f"AZ_HO3_LAB_{uuid.uuid4().hex[:6].upper()}"
+
+    derived_pkg, changes = build_custom_lab_package(
+        canonical_pkg, params, lab_package_id
+    )
+    _ephemeral_packages[lab_package_id] = derived_pkg
+
+    # Run assurance comparing canonical vs derived package
+    run_req = AssuranceRunRequest(
+        left_package_id="AZ_HO3_2026_09",
+        right_package_id=lab_package_id,
+        include_portfolio_analysis=True,
+        async_execution=params.async_execution,
+    )
+
+    run_response = create_assurance_run(run_req, response)
+    run_id = run_response["run_id"]
+
+    # Log scenario lab modifications into run store metadata
+    store = get_run_store()
+    rec = store.get_run(run_id)
+    if rec:
+        rec.metadata["scenario_type"] = "SCENARIO_LAB"
+        rec.metadata["scenario_name"] = params.name
+        rec.metadata["parameter_overrides"] = changes
+        store.update_run(rec)
+        store.log_event(
+            run_id=run_id,
+            stage="SCENARIO_LAB",
+            message=f"Created derived target package '{lab_package_id}' with {len(changes)} parameter modifications.",
+            agent_name="ScenarioLabService",
+            details=changes,
+        )
+
+    return {
+        **run_response,
+        "lab_package_id": lab_package_id,
+        "parameter_changes": changes,
     }
 
 
@@ -300,10 +427,35 @@ def get_assurance_run_result(run_id: str, response: Response) -> dict[str, Any]:
         }
 
     if isinstance(record.report, dict):
-        return record.report
-    if hasattr(record.report, "model_dump"):
-        return record.report.model_dump(mode="json")
-    return dict(record.report)
+        res_dict = dict(record.report)
+    elif hasattr(record.report, "model_dump"):
+        res_dict = record.report.model_dump(mode="json")
+    else:
+        res_dict = dict(record.report)
+
+    # Ensure structured sections are available from run record if not already in report
+    if not res_dict.get("semantic_diff") and record.semantic_diff_summary:
+        res_dict["semantic_diff"] = record.semantic_diff_summary
+    if not res_dict.get("semantic_differences") and record.semantic_diff_summary:
+        res_dict["semantic_differences"] = record.semantic_diff_summary.get("differences", [])
+    if not res_dict.get("impact") and record.impact_summary:
+        res_dict["impact"] = record.impact_summary
+    if not res_dict.get("impact_analysis") and record.impact_summary:
+        res_dict["impact_analysis"] = record.impact_summary
+    if not res_dict.get("test_plan") and record.test_plan_summary:
+        res_dict["test_plan"] = record.test_plan_summary
+    if not res_dict.get("reconciliation") and record.reconciliation_summary:
+        res_dict["reconciliation"] = record.reconciliation_summary
+    if not res_dict.get("portfolio") and record.portfolio_summary:
+        res_dict["portfolio"] = record.portfolio_summary
+    if not res_dict.get("portfolio_exposure") and record.portfolio_summary:
+        res_dict["portfolio_exposure"] = record.portfolio_summary
+    if not res_dict.get("agent_steps") and record.agent_activity:
+        res_dict["agent_steps"] = record.agent_activity
+    if not res_dict.get("decision") and record.decision:
+        res_dict["decision"] = record.decision
+
+    return res_dict
 
 
 @router.get("/assurance/runs/{run_id}/evidence")

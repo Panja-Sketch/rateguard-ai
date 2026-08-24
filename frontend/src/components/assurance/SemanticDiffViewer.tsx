@@ -1,29 +1,40 @@
 'use client';
 
 import { SemanticDiffItem } from '@/lib/types/assurance';
-import { AlertTriangle, ArrowRight, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
 
 interface SemanticDiffViewerProps {
-  diffs: SemanticDiffItem[];
+  diffs?: SemanticDiffItem[];
+  isCompleted?: boolean;
 }
 
-export function SemanticDiffViewer({ diffs }: SemanticDiffViewerProps) {
+export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffViewerProps) {
   if (!diffs || diffs.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-6 text-center text-slate-400">
-        No semantic differences detected between pricing models.
+      <div className="rounded-xl border border-emerald-800/60 bg-emerald-950/20 p-8 text-center space-y-3">
+        <CheckCircle2 className="h-10 w-10 text-emerald-400 mx-auto" />
+        <h4 className="text-sm font-bold text-emerald-300">
+          {isCompleted
+            ? 'No Material Pricing Drift Detected'
+            : 'Waiting for Semantic Analysis...'}
+        </h4>
+        <p className="text-xs text-slate-300 max-w-md mx-auto">
+          {isCompleted
+            ? 'Deterministic IPIR 0.1 AST comparison verified full equivalence between pricing intent and target implementation.'
+            : 'Semantic assurance agent will compare pricing representation ASTs once compiled.'}
+        </p>
       </div>
     );
   }
 
   const getSeverityBadge = (severity: string) => {
-    switch (severity) {
+    switch (severity?.toUpperCase()) {
       case 'CRITICAL':
-        return 'bg-rose-950/80 text-rose-300 border-rose-800';
+        return 'bg-rose-950 text-rose-300 border-rose-800';
       case 'HIGH':
-        return 'bg-amber-950/80 text-amber-300 border-amber-800';
+        return 'bg-amber-950 text-amber-300 border-amber-800';
       case 'MEDIUM':
-        return 'bg-yellow-950/80 text-yellow-300 border-yellow-800';
+        return 'bg-yellow-950 text-yellow-300 border-yellow-800';
       default:
         return 'bg-slate-800 text-slate-300 border-slate-700';
     }
@@ -89,4 +100,3 @@ export function SemanticDiffViewer({ diffs }: SemanticDiffViewerProps) {
     </div>
   );
 }
-

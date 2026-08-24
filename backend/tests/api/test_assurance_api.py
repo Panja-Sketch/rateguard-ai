@@ -104,3 +104,70 @@ def test_05_cors_origin_headers() -> None:
     )
     assert res.status_code == 200
     assert res.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_06_system_info() -> None:
+    res = client.get("/api/v1/system/info")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["gemini_model"] == "gemini-3.7-flash"
+    assert data["agent_framework"] == "Google ADK"
+    assert data["ipir_version"] == "0.1"
+
+
+def test_07_demo_scenarios_catalog() -> None:
+    res = client.get("/api/v1/demo/scenarios")
+    assert res.status_code == 200
+    data = res.json()
+    assert "scenarios" in data
+    assert data["count"] >= 5
+    ids = [s["id"] for s in data["scenarios"]]
+    assert "SCENARIO_A" in ids
+    assert "SCENARIO_B" in ids
+    assert "SCENARIO_C" in ids
+
+
+def test_08_clean_no_drift_pass() -> None:
+    res = client.post(
+        "/api/v1/assurance/runs",
+        json={
+            "left_package_id": "AZ_HO3_2026_09",
+            "right_package_id": "AZ_HO3_2026_09_CLEAN",
+            "include_portfolio_analysis": False,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "PASS"
+
+
+def test_09_deductible_drift_block() -> None:
+    res = client.post(
+        "/api/v1/assurance/runs",
+        json={
+            "left_package_id": "AZ_HO3_2026_09",
+            "right_package_id": "AZ_HO3_2026_09_DEDUCTIBLE_DRIFT",
+            "include_portfolio_analysis": False,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] in ("BLOCK_DEPLOYMENT", "REVIEW")
+
+
+def test_10_scenario_lab_derived_run() -> None:
+    res = client.post(
+        "/api/v1/assurance/scenario-lab",
+        json={
+            "name": "Judge Custom Lab Test",
+            "roof_age_21_30_factor": 1.20,
+            "deductible_1000_factor": 0.85,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "run_id" in data
+    assert "lab_package_id" in data
+    assert "parameter_changes" in data
+    assert "roof_age_21_30_factor" in data["parameter_changes"]
+    assert "deductible_1000_factor" in data["parameter_changes"]

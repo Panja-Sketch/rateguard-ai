@@ -3,7 +3,7 @@ import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck } from 'lucide-r
 export default function ArchitecturePage() {
   const techStack = [
     {
-      title: 'Google ADK + Gemini 3.5+',
+      title: 'Google ADK + Gemini 3.7 Flash',
       category: 'Agent Framework',
       desc: 'Orchestrates multi-agent workflow, reasons across semantic diffs, generates test plans, and provides natural-language executive explanations.',
       icon: Bot,
