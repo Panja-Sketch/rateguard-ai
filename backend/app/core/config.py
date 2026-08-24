@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     bigquery_location: str = "US"
 
     # Pub/Sub Async Workflow Configuration
-    async_enabled: bool = False
+    async_enabled: bool = True
+    execution_mode: str = "pubsub"  # "pubsub" (production default) | "local" (in-memory test mode)
     pubsub_topic: str = "assurance-runs"
     pubsub_subscription: str = "assurance-worker"
 

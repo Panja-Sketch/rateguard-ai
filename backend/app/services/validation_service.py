@@ -1,5 +1,11 @@
 from urllib.parse import urlparse
-from app.models.mission import AssuranceMission, ComparisonMode, RuntimeConnectorConfig, ValidationIssue
+
+from app.models.mission import (
+    AssuranceMission,
+    ComparisonMode,
+    RuntimeConnectorConfig,
+    ValidationIssue,
+)
 
 
 class MissionValidationService:

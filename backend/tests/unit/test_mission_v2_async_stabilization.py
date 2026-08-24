@@ -1,0 +1,196 @@
+from unittest.mock import MagicMock, patch
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.models.mission import (
+    AssuranceMission,
+    ComparisonMode,
+    MissionObjective,
+    MissionStatus,
+    PricingSourceRef,
+)
+from app.models.result_v2 import (
+    AnalysisStatus,
+    AssuranceResultV2,
+    BlastRadiusResult,
+    SectionResult,
+)
+from app.storage import AssuranceRunRecord, AssuranceRunStatus, get_run_store
+from app.storage.firestore_store import sanitize_for_firestore
+
+client = TestClient(app)
+
+
+def test_async_mission_creation_returns_202_fast():
+    """Proves POST /api/v1/missions validates synchronously and returns HTTP 202 immediately."""
+    payload = {
+        "name": "Async Stabilization Verification Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {
+            "source_id": "AZ_HO3_2026_09",
+            "source_type": "SAMPLE_RELEASE",
+            "name": "Actuarial Spec",
+        },
+        "source_b": {
+            "source_id": "AZ_HO3_2026_09_CLEAN",
+            "source_type": "SAMPLE_RELEASE",
+            "name": "Clean Implementation",
+        },
+        "disposable_sample_run": True,
+    }
+
+    res = client.post("/api/v1/missions", json=payload)
+    assert res.status_code == 202
+    data = res.json()
+    assert "mission_id" in data
+    assert data["mission_id"].startswith("MIS-")
+    assert data["status"] == "QUEUED"
+    assert data["workflow_stage"] == "QUEUED"
+    assert "status_url" in data
+
+
+def test_pubsub_publish_failure_returns_503_without_local_execution():
+    """Proves Pub/Sub publishing failure returns HTTP 503 MISSION_QUEUE_UNAVAILABLE and does NOT execute in API process."""
+    payload = {
+        "name": "PubSub Failure Test Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Spec"},
+        "source_b": {"source_id": "AZ_HO3_2026_09_CLEAN", "source_type": "SAMPLE_RELEASE", "name": "Target"},
+    }
+
+    mock_publisher = MagicMock()
+    mock_publisher.publish_assurance_job.side_effect = RuntimeError("Pub/Sub Topic Unavailable")
+
+    with patch("app.api.missions.get_message_publisher", return_value=mock_publisher):
+        res = client.post("/api/v1/missions", json=payload)
+        assert res.status_code == 503
+        data = res.json()["detail"]
+        assert data["code"] == "MISSION_QUEUE_UNAVAILABLE"
+        assert "mission_id" in data
+
+        # Confirm persisted mission record reflects queue failure
+        store = get_run_store()
+        rec = store.get_run(data["mission_id"])
+        assert rec is not None
+        assert rec.workflow_stage == "QUEUE_FAILED"
+        assert rec.metadata.get("error_code") == "MISSION_QUEUE_UNAVAILABLE"
+
+
+def test_invalid_mission_creation_returns_400_without_enqueuing():
+    """Proves invalid missions fail synchronously with HTTP 400 and are never enqueued."""
+    payload = {
+        "name": "Invalid Runtime Mission",
+        "mode": "RUNTIME_VERIFICATION",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        # Missing required runtime_connector
+        "runtime_connector": None,
+    }
+
+    res = client.post("/api/v1/missions", json=payload)
+    assert res.status_code == 400
+    data = res.json()
+    assert "detail" in data
+
+
+def test_completed_mission_delete_returns_409_conflict():
+    """Proves completed non-disposable audit missions reject DELETE with HTTP 409 Conflict."""
+    store = get_run_store()
+    mission_id = "MIS-AUDIT-COMPLETED-TEST"
+
+    rec = AssuranceRunRecord(
+        run_id=mission_id,
+        status=AssuranceRunStatus.COMPLETED,
+        workflow_stage="COMPLETED",
+        decision="PASS",
+        summary="Completed audit record",
+        metadata={
+            "record_type": "ASSURANCE_MISSION_V2",
+            "disposable_sample_run": False,
+        },
+    )
+    store.save_run(rec)
+
+    res = client.delete(f"/api/v1/missions/{mission_id}")
+    assert res.status_code == 409
+    data = res.json()["detail"]
+    assert data["code"] == "MISSION_DELETE_NOT_ALLOWED"
+
+
+def test_disposable_mission_delete_succeeds():
+    """Proves disposable sample missions can be deleted cleanly."""
+    store = get_run_store()
+    mission_id = "MIS-DISPOSABLE-TEST"
+
+    rec = AssuranceRunRecord(
+        run_id=mission_id,
+        status=AssuranceRunStatus.FAILED,
+        workflow_stage="FAILED",
+        summary="Disposable sample run",
+        metadata={
+            "disposable_sample_run": True,
+        },
+    )
+    store.save_run(rec)
+
+    res = client.delete(f"/api/v1/missions/{mission_id}")
+    assert res.status_code == 200
+    assert res.json()["status"] == "DELETED"
+
+
+def test_firestore_serialization_round_trip():
+    """Proves all V2 models (Decimals, Enums, Datetime, BaseModels) are Firestore-safe."""
+    mission = AssuranceMission(
+        mission_id="MIS-FIRESTORE-TEST",
+        name="Firestore Safety Audit",
+        mode=ComparisonMode.RELEASE_CONFORMANCE,
+        status=MissionStatus.COMPLETED,
+        objective=MissionObjective(
+            product="AZ_HO3",
+            jurisdiction="Arizona",
+            effective_period_start="2026-09-01",
+            portfolio_dataset="az_ho3_2026_synthetic_50k.csv",
+            gating_policy="STRICT_ZERO_DRIFT",
+        ),
+        source_a=PricingSourceRef(
+            source_id="AZ_HO3_2026_09",
+            source_type="SAMPLE_RELEASE",
+            name="Canonical Intent",
+        ),
+    )
+
+    clean_dict = sanitize_for_firestore(mission)
+    assert isinstance(clean_dict["status"], str)
+    assert clean_dict["status"] == "COMPLETED"
+    assert isinstance(clean_dict["mode"], str)
+
+    result = AssuranceResultV2(
+        mission_id="MIS-FIRESTORE-TEST",
+        mode=ComparisonMode.RELEASE_CONFORMANCE,
+        overall_status="COMPLETED",
+        blast_radius=SectionResult(
+            status=AnalysisStatus.SUCCEEDED,
+            data=BlastRadiusResult(
+                portfolio_id="AZ_HO3_2026_SYNTHETIC_50K",
+                total_policies=50000,
+                financially_affected_count=2150,
+                absolute_financial_exposure="142500.50",
+            ),
+        ),
+    )
+
+    clean_res = sanitize_for_firestore(result)
+    assert clean_res["blast_radius"]["data"]["absolute_financial_exposure"] == "142500.50"
+    assert clean_res["blast_radius"]["status"] == "SUCCEEDED"
+
+
+def test_obsolete_scenario_lab_route_returns_410():
+    """Proves obsolete Scenario Lab API route is retired and returns HTTP 410 Gone."""
+    res = client.post("/api/v1/assurance/scenario-lab", json={})
+    assert res.status_code == 410
+    assert "retired" in res.json()["detail"].lower()

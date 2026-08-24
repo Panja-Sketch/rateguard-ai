@@ -1,15 +1,15 @@
 from decimal import Decimal
-import pytest
 
-from app.adapters.runtime_connector import BlackBoxRatingApiAdapter, RuntimeConnectorConfig
+from app.adapters.runtime_connector import BlackBoxRatingApiAdapter
 from app.agents.supervisor import AssuranceSupervisor
 from app.api.assurance import resolve_demo_package
 from app.models.mission import (
     AssuranceMission,
     ComparisonMode,
     MissionObjective,
-    MissionStatus,
     PricingSourceRef,
+)
+from app.models.mission import (
     RuntimeConnectorConfig as ConfigModel,
 )
 from app.services.remediation_service import RemediationService

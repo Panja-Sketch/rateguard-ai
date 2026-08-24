@@ -121,6 +121,7 @@ Invoke-CheckedCommand -StageName "rateguard-api deployment" -ScriptBlock {
     --platform managed `
     --allow-unauthenticated `
     --service-account "$RUNTIME_SA" `
+    --memory=512Mi `
     --env-vars-file=./infrastructure/runtime-env.yaml
 }
 
@@ -140,6 +141,7 @@ Invoke-CheckedCommand -StageName "rateguard-worker deployment" -ScriptBlock {
     --platform managed `
     --no-allow-unauthenticated `
     --service-account "$RUNTIME_SA" `
+    --memory=1Gi `
     --env-vars-file=./infrastructure/runtime-env.yaml
 }
 
@@ -204,6 +206,7 @@ Invoke-CheckedCommand -StageName "CORS update" -ScriptBlock {
     --platform managed `
     --allow-unauthenticated `
     --service-account "$RUNTIME_SA" `
+    --memory=512Mi `
     --env-vars-file="$TEMP_ENV"
 }
 

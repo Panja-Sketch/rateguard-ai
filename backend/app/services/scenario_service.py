@@ -200,8 +200,8 @@ def build_custom_lab_package(
             if mod.id == "claims_free_discount":
                 # discount is stored as Decimal e.g. -0.05
                 rate_dec = -(params.claims_free_discount_pct / Decimal("100.0"))
-                orig = getattr(mod, "amount", Decimal("-0.05"))
-                mod.amount = rate_dec
+                orig = getattr(mod, "value", Decimal("-0.05"))
+                mod.value = rate_dec
                 changes["claims_free_discount_pct"] = {
                     "canonical": "5.0%",
                     "target": f"{params.claims_free_discount_pct}%",

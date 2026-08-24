@@ -1,3 +1,5 @@
+import logging
+import os
 import time
 from decimal import Decimal
 
@@ -7,6 +9,17 @@ from app.engines.portfolio.models import DefectExposure, PortfolioExposureResult
 from app.engines.portfolio.predicate_evaluator import matches_predicate
 from app.engines.portfolio.repricing import reprice_policy
 from app.ipir.package import IPIRPackage
+
+logger = logging.getLogger(__name__)
+
+
+def _get_mem_mb() -> float:
+    try:
+        import psutil
+        proc = psutil.Process(os.getpid())
+        return round(proc.memory_info().rss / (1024 * 1024), 2)
+    except Exception:
+        return 0.0
 
 
 class PortfolioAnalyzer:
@@ -20,6 +33,8 @@ class PortfolioAnalyzer:
     ) -> PortfolioExposureResult:
         """Executes portfolio-wide impact analysis, repricing, and financial exposure."""
         start_time = time.perf_counter()
+        start_mem = _get_mem_mb()
+        logger.info("Portfolio evaluation started for %d policies. Starting process memory: %.2f MB", len(policies), start_mem)
 
         diff_result = compare_packages(canonical_pkg, target_pkg)
         impact = ImpactAnalyzer().analyze(diff_result, canonical_pkg)
@@ -153,6 +168,14 @@ class PortfolioAnalyzer:
 
         elapsed_sec = time.perf_counter() - start_time
         pol_per_sec = round(total_policies / elapsed_sec, 2) if elapsed_sec > 0 else 0.0
+        end_mem = _get_mem_mb()
+        logger.info(
+            "Portfolio evaluation finished in %.2fs (%.2f pol/sec). Ending process memory: %.2f MB (delta: %+.2f MB).",
+            elapsed_sec,
+            pol_per_sec,
+            end_mem,
+            end_mem - start_mem,
+        )
 
         return PortfolioExposureResult(
             portfolio_id="AZ_HO3_2026_SYNTHETIC_50K",

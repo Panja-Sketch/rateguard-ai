@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.messaging import (
     AssuranceJob,
@@ -107,7 +107,13 @@ def test_assurance_worker_idempotency_skips_completed():
     assert not runner.run_assurance.called
 
 
-def test_factory_returns_memory_publisher_by_default():
-    """Verifies factory returns InMemoryPublisher when async is disabled."""
-    pub = get_message_publisher()
-    assert isinstance(pub, InMemoryPublisher)
+def test_factory_returns_memory_publisher_when_local():
+    """Verifies factory returns InMemoryPublisher when execution_mode is local or async is disabled."""
+    with patch("app.messaging.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.execution_mode = "local"
+        mock_settings.async_enabled = False
+        mock_get_settings.return_value = mock_settings
+
+        pub = get_message_publisher()
+        assert isinstance(pub, InMemoryPublisher)

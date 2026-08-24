@@ -164,10 +164,5 @@ def test_10_scenario_lab_derived_run() -> None:
             "deductible_1000_factor": 0.85,
         },
     )
-    assert res.status_code == 200
-    data = res.json()
-    assert "run_id" in data
-    assert "lab_package_id" in data
-    assert "parameter_changes" in data
-    assert "roof_age_21_30_factor" in data["parameter_changes"]
-    assert "deductible_1000_factor" in data["parameter_changes"]
+    assert res.status_code == 410
+    assert "retired" in res.json()["detail"].lower()

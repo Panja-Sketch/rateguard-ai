@@ -9,9 +9,9 @@ from app.messaging.worker import AssuranceWorker
 def get_message_publisher() -> BaseMessagePublisher:
     """Factory function returning configured message publisher adapter."""
     settings = get_settings()
-    if settings.async_enabled:
-        return PubSubPublisher()
-    return InMemoryPublisher()
+    if settings.execution_mode.lower() == "local" or not settings.async_enabled:
+        return InMemoryPublisher()
+    return PubSubPublisher()
 
 
 __all__ = [

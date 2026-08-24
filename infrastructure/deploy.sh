@@ -82,6 +82,7 @@ gcloud run deploy rateguard-api \
   --platform managed \
   --allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
+  --memory=512Mi \
   --env-vars-file=./infrastructure/runtime-env.yaml
 
 API_URL=$(gcloud run services describe rateguard-api --region "$REGION" --format "value(status.url)")
@@ -95,6 +96,7 @@ gcloud run deploy rateguard-worker \
   --platform managed \
   --no-allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
+  --memory=1Gi \
   --env-vars-file=./infrastructure/runtime-env.yaml
 
 WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" --format "value(status.url)")
@@ -140,6 +142,7 @@ gcloud run deploy rateguard-api \
   --platform managed \
   --allow-unauthenticated \
   --service-account "$RUNTIME_SA" \
+  --memory=512Mi \
   --env-vars-file="$TEMP_ENV"
 
 rm -f "$TEMP_ENV"

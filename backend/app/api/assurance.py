@@ -12,8 +12,6 @@ from app.messaging import AssuranceJob, get_message_publisher
 from app.services.ingestion_service import PricingSourceIngestionService
 from app.services.scenario_service import (
     DEMO_SCENARIOS_CATALOG,
-    ScenarioLabParams,
-    build_custom_lab_package,
     derive_scenario_package,
 )
 from app.storage import AssuranceRunRecord, AssuranceRunStatus, EvidenceRecord, get_run_store
@@ -176,57 +174,18 @@ def list_demo_scenarios() -> dict[str, Any]:
 
 
 @router.post("/assurance/scenario-lab")
-def create_scenario_lab_run(
-    params: ScenarioLabParams, response: Response
-) -> dict[str, Any]:
-    """Dynamically creates an ephemeral target package from Scenario Lab parameters and launches assurance."""
-    canonical_pkg = resolve_demo_package("AZ_HO3_2026_09")
-    lab_package_id = f"AZ_HO3_LAB_{uuid.uuid4().hex[:6].upper()}"
-
-    derived_pkg, changes = build_custom_lab_package(
-        canonical_pkg, params, lab_package_id
+def create_scenario_lab_run() -> dict[str, Any]:
+    """Obsolete Scenario Lab endpoint retired in Assurance Mission V2."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Scenario Lab has been retired in RateGuard AI Assurance Mission V2. Use POST /api/v1/missions to create assurance missions.",
     )
-    _ephemeral_packages[lab_package_id] = derived_pkg
-
-    # Run assurance comparing canonical vs derived package
-    run_req = AssuranceRunRequest(
-        left_package_id="AZ_HO3_2026_09",
-        right_package_id=lab_package_id,
-        include_portfolio_analysis=True,
-        async_execution=params.async_execution,
-    )
-
-    run_response = create_assurance_run(run_req, response)
-    run_id = run_response["run_id"]
-
-    # Log scenario lab modifications into run store metadata
-    store = get_run_store()
-    rec = store.get_run(run_id)
-    if rec:
-        rec.metadata["scenario_type"] = "SCENARIO_LAB"
-        rec.metadata["scenario_name"] = params.name
-        rec.metadata["parameter_overrides"] = changes
-        store.update_run(rec)
-        store.log_event(
-            run_id=run_id,
-            stage="SCENARIO_LAB",
-            message=f"Created derived target package '{lab_package_id}' with {len(changes)} parameter modifications.",
-            agent_name="ScenarioLabService",
-            details=changes,
-        )
-
-    return {
-        **run_response,
-        "lab_package_id": lab_package_id,
-        "parameter_changes": changes,
-    }
 
 
 @router.post("/assurance/runs")
 def create_assurance_run(req: AssuranceRunRequest, response: Response) -> dict[str, Any]:
     """Initiates and executes an autonomous agentic pricing assurance workflow run."""
-    settings = get_settings()
-    is_async = req.async_execution if req.async_execution is not None else settings.async_enabled
+    is_async = req.async_execution is True
 
     run_id = f"RUN-{uuid.uuid4().hex[:8].upper()}"
     job_id = f"JOB-{uuid.uuid4().hex[:8].upper()}"
