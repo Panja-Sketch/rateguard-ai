@@ -38,6 +38,9 @@ def sanitize_for_firestore(val: Any) -> Any:
     return str(val)
 
 
+DEFAULT_COLLECTION_NAME = "assurance_runs"
+
+
 class FirestoreRunStore(BaseRunStore):
     """Google Cloud Firestore adapter for persistent run state and evidence lineage."""
 
@@ -46,10 +49,21 @@ class FirestoreRunStore(BaseRunStore):
         project_id: str = "rateguard-ai",
         database_id: str | None = None,
         fallback_on_error: bool = True,
+        collection_name: str = DEFAULT_COLLECTION_NAME,
     ) -> None:
+        """`collection_name` namespaces every run/event/evidence document under a
+        single top-level Firestore collection (events/evidence are always
+        subcollections of that same collection's run documents — see the
+        class docstring on each method touching them). This is what lets a
+        candidate/staging deployment (`RATEGUARD_FIRESTORE_COLLECTION=
+        assurance_runs_staging`) read and write completely isolated documents
+        from production (`assurance_runs`) while sharing the same Firestore
+        database — never the same documents, never cross-contamination.
+        """
         self.project_id = project_id
         self.database_id = database_id
         self.fallback_on_error = fallback_on_error
+        self.collection_name = collection_name or DEFAULT_COLLECTION_NAME
         self._fallback_store = InMemoryRunStore()
         self._db: Any = None
 
@@ -83,7 +97,7 @@ class FirestoreRunStore(BaseRunStore):
         self._fallback_store.create_run(record)
         if self._db is not None:
             try:
-                doc_ref = self._db.collection("assurance_runs").document(record.run_id)
+                doc_ref = self._db.collection(self.collection_name).document(record.run_id)
                 clean_payload = sanitize_for_firestore(record.model_dump(mode="json"))
                 doc_ref.set(clean_payload)
             except Exception as e:
@@ -95,7 +109,7 @@ class FirestoreRunStore(BaseRunStore):
     def get_run(self, run_id: str) -> AssuranceRunRecord | None:
         if self._db is not None:
             try:
-                doc_ref = self._db.collection("assurance_runs").document(run_id)
+                doc_ref = self._db.collection(self.collection_name).document(run_id)
                 doc = doc_ref.get()
                 if doc.exists:
                     data = doc.to_dict()
@@ -110,7 +124,7 @@ class FirestoreRunStore(BaseRunStore):
         self._fallback_store.update_run(record)
         if self._db is not None:
             try:
-                doc_ref = self._db.collection("assurance_runs").document(record.run_id)
+                doc_ref = self._db.collection(self.collection_name).document(record.run_id)
                 clean_payload = sanitize_for_firestore(record.model_dump(mode="json"))
                 doc_ref.set(clean_payload, merge=True)
             except Exception as e:
@@ -125,7 +139,7 @@ class FirestoreRunStore(BaseRunStore):
                 from google.cloud import firestore
 
                 col_ref = (
-                    self._db.collection("assurance_runs")
+                    self._db.collection(self.collection_name)
                     .order_by("created_at", direction=firestore.Query.DESCENDING)
                     .limit(limit)
                 )
@@ -146,7 +160,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 doc_ref = (
-                    self._db.collection("assurance_runs")
+                    self._db.collection(self.collection_name)
                     .document(run_id)
                     .collection("events")
                     .document(event.event_id)
@@ -163,7 +177,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 col_ref = (
-                    self._db.collection("assurance_runs").document(run_id).collection("events")
+                    self._db.collection(self.collection_name).document(run_id).collection("events")
                 )
                 docs = col_ref.stream()
                 events = [RunEvent.model_validate(doc.to_dict()) for doc in docs]
@@ -180,7 +194,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 doc_ref = (
-                    self._db.collection("assurance_runs")
+                    self._db.collection(self.collection_name)
                     .document(run_id)
                     .collection("evidence")
                     .document(evidence.evidence_id)
@@ -197,7 +211,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is not None:
             try:
                 col_ref = (
-                    self._db.collection("assurance_runs").document(run_id).collection("evidence")
+                    self._db.collection(self.collection_name).document(run_id).collection("evidence")
                 )
                 docs = col_ref.stream()
                 evidence_list = [EvidenceRecord.model_validate(doc.to_dict()) for doc in docs]
@@ -217,7 +231,7 @@ class FirestoreRunStore(BaseRunStore):
         if self._db is None:
             return self._fallback_store.delete_run(run_id)
         try:
-            doc_ref = self._db.collection("assurance_runs").document(run_id)
+            doc_ref = self._db.collection(self.collection_name).document(run_id)
             snapshot = doc_ref.get()
             if not snapshot.exists:
                 return False
@@ -251,7 +265,7 @@ class FirestoreRunStore(BaseRunStore):
 
         from app.services.mission_transitions import TERMINAL_STATUSES
 
-        doc_ref = self._db.collection("assurance_runs").document(run_id)
+        doc_ref = self._db.collection(self.collection_name).document(run_id)
 
         @firestore.transactional
         def _txn(transaction: Any) -> tuple[LeaseOutcome, AssuranceRunRecord | None]:

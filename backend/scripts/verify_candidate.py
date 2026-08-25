@@ -1,0 +1,418 @@
+"""Opt-in candidate/staging acceptance test suite.
+
+Exercises a deployed CANDIDATE (`--no-traffic --tag candidate`) API + worker
+end to end over HTTP only: creates one real, disposable RELEASE_CONFORMANCE
+demo mission, waits for it to complete, and inspects the result for the
+specific evidence Group 3 requires (real Gemini decision, deterministic
+premium mismatches, BLOCK_DEPLOYMENT, portfolio impact, remediation +
+revalidation, a deterministic action with no model_id), then exercises the
+mission lifecycle (cancel, delete, archive, structured validation errors).
+
+Refuses to run without explicit opt-in (`--yes-test-candidate`), because it
+creates real state (a mission, Gemini invocations, Firestore documents) in
+whatever `--api-url` it is pointed at. It only ever talks to the URLs passed
+on the command line — never discovers or guesses a URL, never touches
+production. The candidate API's own environment (RATEGUARD_PUBSUB_TOPIC=
+assurance-runs-staging, RATEGUARD_FIRESTORE_COLLECTION=assurance_runs_staging)
+is what actually confines every side effect to staging resources — this
+script has no direct Pub/Sub or Firestore access of its own and never needs
+any.
+
+Scope limitation (documented, not silently skipped): items that would require
+direct Pub/Sub publish access (inducing a genuine duplicate delivery) or a
+dedicated evidence/events-listing API (schema_valid, raw response_id,
+persisted per-stage event timeline) are not exposable through the public
+HTTP surface this script is restricted to. Those specific sub-checks are
+reported as BEST-EFFORT / NOT-VERIFIABLE-VIA-API rather than faked as PASS.
+The stronger, direct-access versions of those checks already exist as this
+repository's own pytest suite (test_worker_delivery_outcomes.py).
+
+Does NOT test malformed/poison DLQ delivery — that is intentionally a
+separate, explicitly destructive-to-staging-only script
+(test_dlq_poison_delivery.py), since it deliberately creates a message
+designed to fail repeatedly.
+
+Usage:
+    python scripts/verify_candidate.py --yes-test-candidate \\
+        --api-url https://candidate---rateguard-api-xxx.a.run.app \\
+        --frontend-url https://candidate---rateguard-web-xxx.a.run.app
+"""
+
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+
+EXPECTED_GEMINI_MODEL = "gemini-3.7-flash"
+EXPECTED_FRAMEWORK_SUBSTRING = "Google GenAI SDK"
+DEMO_SOURCE_A = "AZ_HO3_2026_09"
+DEMO_SOURCE_B_DEFECTIVE = "AZ_HO3_2026_09_DEFECTIVE"
+
+# Defensive secret-shaped patterns to scan /api/v1/system/status for. Mirrors
+# app.agents.gemini_client._SECRET_PATTERNS's intent (defense-in-depth, not a
+# guarantee) applied to the response body instead of log lines.
+_SECRET_LIKE_SUBSTRINGS = ("AIza", "ya29.", "-----BEGIN")
+
+
+@dataclass
+class CheckResult:
+    name: str
+    passed: bool
+    detail: str
+
+
+@dataclass
+class Report:
+    checks: list[CheckResult] = field(default_factory=list)
+    staging_mission_ids: list[str] = field(default_factory=list)
+
+    def add(self, name: str, passed: bool, detail: str) -> None:
+        self.checks.append(CheckResult(name, passed, detail))
+        marker = "PASS" if passed else "FAIL"
+        print(f"[{marker}] {name}: {detail}")
+
+
+def _http(method: str, url: str, body: dict | None = None, timeout: float = 30.0) -> tuple[int, dict]:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            return resp.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8")
+        try:
+            return e.code, json.loads(raw)
+        except json.JSONDecodeError:
+            return e.code, {"raw": raw}
+
+
+def check_health_live(report: Report, api_url: str) -> None:
+    status_code, body = _http("GET", f"{api_url}/health/live")
+    ok = status_code == 200 and body.get("status") == "healthy"
+    report.add("health_live", ok, f"HTTP {status_code}, body={body}")
+
+
+def check_health_ready(report: Report, api_url: str) -> None:
+    status_code, body = _http("GET", f"{api_url}/health/ready")
+    checks = body.get("checks", {})
+    run_store_ok = checks.get("run_store", {}).get("status") == "ok"
+    queue_ok = checks.get("message_queue", {}).get("status") == "ok"
+    # /health/ready does not separately probe "worker readiness" as a distinct
+    # dependency (the worker is a separate Cloud Run service with its own
+    # /health/ready) — message_queue==ok here confirms this API instance can
+    # construct a Pub/Sub publisher for the configured staging topic, which is
+    # the API-side half of worker readiness.
+    ok = status_code in (200, 503) and run_store_ok and queue_ok
+    report.add(
+        "health_ready", ok,
+        f"HTTP {status_code}, run_store={checks.get('run_store')}, message_queue={checks.get('message_queue')}",
+    )
+
+
+def check_system_status(report: Report, api_url: str) -> None:
+    status_code, body = _http("GET", f"{api_url}/api/v1/system/status")
+    raw_text = json.dumps(body)
+
+    model_ok = body.get("gemini", {}).get("model") == EXPECTED_GEMINI_MODEL or EXPECTED_GEMINI_MODEL in raw_text
+    framework_ok = EXPECTED_FRAMEWORK_SUBSTRING in raw_text
+    vertex_ok = "vertex" in raw_text.lower() or "auth_mode" in raw_text.lower()
+    no_secrets = not any(marker in raw_text for marker in _SECRET_LIKE_SUBSTRINGS)
+
+    ok = status_code == 200 and model_ok and framework_ok and no_secrets
+    report.add(
+        "system_status", ok,
+        f"HTTP {status_code}, model_ok={model_ok}, framework_ok={framework_ok}, "
+        f"vertex_mentioned={vertex_ok}, no_secret_markers={no_secrets}",
+    )
+
+
+def create_demo_mission(report: Report, api_url: str) -> str | None:
+    payload = {
+        "name": "Candidate Acceptance Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": DEMO_SOURCE_A, "source_type": "SAMPLE_RELEASE", "name": "Intent"},
+        "source_b": {"source_id": DEMO_SOURCE_B_DEFECTIVE, "source_type": "SAMPLE_RELEASE", "name": "Defective Target"},
+        "disposable_sample_run": True,
+    }
+    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
+    mission_id = body.get("mission_id")
+    ok = status_code == 202 and bool(mission_id) and body.get("status") == "QUEUED"
+    report.add("create_demo_mission", ok, f"HTTP {status_code}, mission_id={mission_id}")
+    if mission_id:
+        report.staging_mission_ids.append(mission_id)
+    return mission_id
+
+
+def wait_for_completion(report: Report, api_url: str, mission_id: str, timeout_s: float = 240.0) -> dict | None:
+    seen_statuses: list[str] = []
+    deadline = time.monotonic() + timeout_s
+    last_body: dict = {}
+    while time.monotonic() < deadline:
+        status_code, body = _http("GET", f"{api_url}/api/v1/missions/{mission_id}")
+        last_body = body
+        current = body.get("status")
+        if not seen_statuses or seen_statuses[-1] != current:
+            seen_statuses.append(current)
+        if current in ("COMPLETED", "FAILED", "NEEDS_REVIEW", "CANCELLED"):
+            break
+        time.sleep(3)
+
+    reached_completed = seen_statuses and seen_statuses[-1] == "COMPLETED"
+    plausible_sequence = "QUEUED" in seen_statuses or "RUNNING" in seen_statuses
+    ok = reached_completed and plausible_sequence
+    report.add(
+        "mission_reaches_completed", ok,
+        f"observed status sequence={seen_statuses} within {timeout_s}s",
+    )
+    return last_body if reached_completed else None
+
+
+def check_persisted_events_proxy(report: Report, mission_detail: dict) -> None:
+    """No dedicated /missions/{id}/events endpoint exists on this API surface
+    (documented scope limitation — see module docstring). Best-effort proxy:
+    confirms the mission has real started_at/completed_at timestamps and a
+    non-empty agent_execution timeline, which can only be populated by actual
+    persisted stage progression, not a single terminal write."""
+    result = mission_detail.get("result", {})
+    agent_actions = result.get("agent_execution", {}).get("data") or []
+    ok = bool(mission_detail.get("started_at")) and bool(mission_detail.get("completed_at")) and len(agent_actions) > 0
+    report.add(
+        "persisted_stage_events_proxy", ok,
+        f"started_at={mission_detail.get('started_at')!r}, completed_at={mission_detail.get('completed_at')!r}, "
+        f"agent_action_count={len(agent_actions)} "
+        "(proxy check: no dedicated events-listing endpoint exists to verify the full stage timeline directly)",
+    )
+
+
+def check_real_gemini_decision(report: Report, mission_detail: dict) -> None:
+    result = mission_detail.get("result", {})
+    agent_actions = result.get("agent_execution", {}).get("data") or []
+    candidates = [
+        a for a in agent_actions
+        if a.get("is_gemini_decision") is True
+        and a.get("is_fallback") is False
+        and a.get("model_id") == EXPECTED_GEMINI_MODEL
+        and a.get("invocation_id")
+    ]
+    ok = len(candidates) > 0
+    report.add(
+        "real_gemini_decision_present", ok,
+        f"{len(candidates)} action(s) match model_id={EXPECTED_GEMINI_MODEL}, invocation_id set, is_fallback=False "
+        "(schema_valid/response_id are not exposed by this API surface — NOT independently verifiable here; "
+        "see GeminiInvocationEvidence / EvidenceRecord, which has no public listing endpoint)",
+    )
+
+
+def check_deterministic_action_has_no_model_id(report: Report, mission_detail: dict) -> None:
+    result = mission_detail.get("result", {})
+    agent_actions = result.get("agent_execution", {}).get("data") or []
+    deterministic = [a for a in agent_actions if a.get("is_gemini_decision") is False]
+    clean = [a for a in deterministic if a.get("model_id") is None]
+    ok = len(deterministic) > 0 and len(clean) == len(deterministic)
+    report.add(
+        "deterministic_action_has_no_model_id", ok,
+        f"{len(deterministic)} deterministic action(s), {len(clean)} correctly carry no model_id",
+    )
+
+
+def check_premium_mismatch_and_block(report: Report, mission_detail: dict) -> None:
+    result = mission_detail.get("result", {})
+    mismatch_count = (result.get("experiments", {}).get("data") or {}).get("mismatch_count", 0)
+    decision_status = (result.get("release_decision", {}).get("data") or {}).get("status")
+    ok = mismatch_count > 0 and decision_status == "BLOCK_DEPLOYMENT"
+    report.add(
+        "premium_mismatch_and_block_deployment", ok,
+        f"mismatch_count={mismatch_count}, release_decision.status={decision_status}",
+    )
+
+
+def check_portfolio_impact_present(report: Report, mission_detail: dict) -> None:
+    result = mission_detail.get("result", {})
+    blast = result.get("blast_radius", {})
+    ok = blast.get("status") == "SUCCEEDED" and bool(blast.get("data"))
+    report.add("portfolio_impact_present", ok, f"blast_radius.status={blast.get('status')}")
+
+
+def check_remediation_and_revalidation_present(report: Report, mission_detail: dict) -> None:
+    result = mission_detail.get("result", {})
+    remediation = result.get("remediation", {})
+    revalidation = result.get("revalidation", {})
+    ok = remediation.get("status") == "SUCCEEDED" and revalidation.get("status") == "SUCCEEDED"
+    report.add(
+        "remediation_and_revalidation_present", ok,
+        f"remediation.status={remediation.get('status')}, revalidation.status={revalidation.get('status')}",
+    )
+
+
+def check_no_duplicate_execution_proxy(report: Report, mission_detail: dict) -> None:
+    """No direct Pub/Sub publish access is available to this HTTP-only
+    script, so a genuinely induced duplicate delivery cannot be tested here
+    (documented scope limitation — see module docstring; the direct-access
+    version of this exact check already exists as this repo's own
+    test_no_duplicate_execution_under_redelivery /
+    test_already_leased_duplicate_does_not_start_second_execution pytest
+    tests). Proxy: confirms the normal single-delivery path executed exactly
+    once (attempt_number == 1)."""
+    attempt_number = mission_detail.get("attempt_number")
+    ok = attempt_number == 1
+    report.add(
+        "no_duplicate_execution_proxy", ok,
+        f"attempt_number={attempt_number} (proxy only — see docstring for the direct-access pytest coverage)",
+    )
+
+
+def check_cancel_delete_lifecycle(report: Report, api_url: str) -> None:
+    payload = {
+        "name": "Candidate Disposable Cancel Test",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": DEMO_SOURCE_A, "source_type": "SAMPLE_RELEASE", "name": "Intent"},
+        "source_b": {"source_id": DEMO_SOURCE_B_DEFECTIVE, "source_type": "SAMPLE_RELEASE", "name": "Defective Target"},
+        "disposable_sample_run": True,
+    }
+    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
+    mission_id = body.get("mission_id")
+    if mission_id:
+        report.staging_mission_ids.append(mission_id)
+    if status_code != 202 or not mission_id:
+        report.add("disposable_mission_created_for_cancel_test", False, f"HTTP {status_code}, body={body}")
+        return
+
+    cancel_status, cancel_body = _http("POST", f"{api_url}/api/v1/missions/{mission_id}/cancel")
+    cancel_ok = cancel_status == 200 and cancel_body.get("status") in ("CANCELLED", "QUEUED", "VALIDATING")
+    report.add("disposable_mission_cancellable", cancel_ok, f"HTTP {cancel_status}, body={cancel_body}")
+
+    # Give the cancel a moment to settle if it raced with QUEUED->RUNNING.
+    time.sleep(2)
+    detail_status, detail_body = _http("GET", f"{api_url}/api/v1/missions/{mission_id}")
+    is_cancelled = detail_body.get("status") == "CANCELLED"
+    deletable = detail_body.get("eligible_actions", {}).get("delete") is True
+    report.add(
+        "cancelled_disposable_mission_deletable", is_cancelled and deletable,
+        f"status={detail_body.get('status')}, eligible_actions.delete={detail_body.get('eligible_actions', {}).get('delete')}",
+    )
+
+    if is_cancelled and deletable:
+        del_status, del_body = _http("DELETE", f"{api_url}/api/v1/missions/{mission_id}")
+        del_ok = del_status == 200
+        report.add("delete_only_disposable_staging_mission", del_ok, f"HTTP {del_status}, body={del_body}")
+        if del_ok and mission_id in report.staging_mission_ids:
+            report.staging_mission_ids.remove(mission_id)
+
+
+def check_completed_mission_not_deletable_but_archivable(report: Report, api_url: str, mission_id: str) -> None:
+    del_status, del_body = _http("DELETE", f"{api_url}/api/v1/missions/{mission_id}")
+    not_deletable = del_status == 409
+    report.add("completed_audit_mission_not_deletable", not_deletable, f"HTTP {del_status}, body={del_body}")
+
+    archive_status, archive_body = _http("POST", f"{api_url}/api/v1/missions/{mission_id}/archive")
+    archivable = archive_status == 200 and archive_body.get("status") == "ARCHIVED"
+    report.add("completed_audit_mission_archivable", archivable, f"HTTP {archive_status}, body={archive_body}")
+
+
+def check_invalid_mission_returns_structured_422(report: Report, api_url: str) -> None:
+    payload = {
+        "name": "Invalid Candidate Mission",
+        "mode": "RUNTIME_VERIFICATION",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "runtime_connector": None,
+    }
+    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
+    detail = body.get("detail", {})
+    issues = detail.get("issues", []) if isinstance(detail, dict) else []
+    has_structured_issue = any({"field", "code", "message"} <= set(i.keys()) for i in issues)
+    ok = status_code == 422 and has_structured_issue
+    report.add("invalid_mission_structured_422", ok, f"HTTP {status_code}, issues={issues}")
+
+
+def check_missing_sources_no_arizona_fallback(report: Report, api_url: str) -> None:
+    payload = {
+        "name": "Missing Sources Candidate Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+    }
+    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
+    ok = status_code == 422
+    report.add(
+        "missing_sources_no_az_ho3_fallback", ok,
+        f"HTTP {status_code} (must reject rather than silently defaulting to the AZ_HO3 demo packages), body={body}",
+    )
+
+
+def check_runtime_verification_no_localhost_fallback(report: Report, api_url: str) -> None:
+    payload = {
+        "name": "Runtime Verification No Connector",
+        "mode": "RUNTIME_VERIFICATION",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {"source_id": DEMO_SOURCE_A, "source_type": "SAMPLE_RELEASE", "name": "Intent"},
+    }
+    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
+    ok = status_code == 422
+    report.add(
+        "runtime_verification_no_localhost_fallback", ok,
+        f"HTTP {status_code} (must reject rather than silently defaulting runtime_connector to localhost), body={body}",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--yes-test-candidate", action="store_true", help="Required explicit opt-in.")
+    parser.add_argument("--api-url", required=False, help="Candidate-tagged rateguard-api URL.")
+    parser.add_argument("--frontend-url", required=False, help="Candidate-tagged rateguard-web URL.")
+    parser.add_argument("--timeout-seconds", type=float, default=240.0, help="Max wait for mission completion.")
+    args = parser.parse_args(argv)
+
+    if not args.yes_test_candidate:
+        print("Refusing to run: pass --yes-test-candidate to explicitly opt into exercising a live candidate deployment.")
+        return 2
+    if not args.api_url:
+        print("Refusing to run: --api-url is required (this script never discovers or guesses a URL).")
+        return 2
+
+    report = Report()
+
+    check_health_live(report, args.api_url)
+    check_health_ready(report, args.api_url)
+    check_system_status(report, args.api_url)
+
+    mission_id = create_demo_mission(report, args.api_url)
+    mission_detail = None
+    if mission_id:
+        mission_detail = wait_for_completion(report, args.api_url, mission_id, timeout_s=args.timeout_seconds)
+
+    if mission_detail:
+        check_persisted_events_proxy(report, mission_detail)
+        check_real_gemini_decision(report, mission_detail)
+        check_premium_mismatch_and_block(report, mission_detail)
+        check_portfolio_impact_present(report, mission_detail)
+        check_remediation_and_revalidation_present(report, mission_detail)
+        check_deterministic_action_has_no_model_id(report, mission_detail)
+        check_no_duplicate_execution_proxy(report, mission_detail)
+        check_completed_mission_not_deletable_but_archivable(report, args.api_url, mission_id)
+    else:
+        print("Skipping result-dependent checks: the demo mission did not reach COMPLETED.")
+
+    check_cancel_delete_lifecycle(report, args.api_url)
+    check_invalid_mission_returns_structured_422(report, args.api_url)
+    check_missing_sources_no_arizona_fallback(report, args.api_url)
+    check_runtime_verification_no_localhost_fallback(report, args.api_url)
+
+    failed = [c for c in report.checks if not c.passed]
+    print(f"\n{len(report.checks) - len(failed)}/{len(report.checks)} passed, {len(failed)} failed.")
+    print(f"\nStaging mission IDs created (clean up later if not already deleted): {report.staging_mission_ids}")
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

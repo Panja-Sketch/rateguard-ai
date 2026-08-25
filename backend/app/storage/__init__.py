@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 from app.storage.firestore_store import FirestoreRunStore
 from app.storage.interfaces import BaseRunStore
@@ -52,19 +53,31 @@ def get_run_store(*, strict: bool = False) -> BaseRunStore:
             _global_run_store = InMemoryRunStore()
         return _global_run_store
 
+    # RATEGUARD_FIRESTORE_COLLECTION namespaces every run/event/evidence
+    # document under a single top-level collection, defaulting to
+    # FirestoreRunStore's own "assurance_runs" production default. A
+    # candidate/staging deployment sets this to "assurance_runs_staging" so
+    # it shares the same Firestore database and project as production while
+    # never reading or writing the same documents.
+    collection_name = os.getenv("RATEGUARD_FIRESTORE_COLLECTION") or None
+
     if strict:
         if _global_strict_run_store is None:
             project_id = os.getenv("RATEGUARD_GOOGLE_CLOUD_PROJECT", "rateguard-ai")
             db_id = os.getenv("RATEGUARD_FIRESTORE_DATABASE")
-            _global_strict_run_store = FirestoreRunStore(
-                project_id=project_id, database_id=db_id, fallback_on_error=False
-            )
+            kwargs: dict[str, Any] = {"project_id": project_id, "database_id": db_id, "fallback_on_error": False}
+            if collection_name:
+                kwargs["collection_name"] = collection_name
+            _global_strict_run_store = FirestoreRunStore(**kwargs)
         return _global_strict_run_store
 
     if _global_run_store is None:
         project_id = os.getenv("RATEGUARD_GOOGLE_CLOUD_PROJECT", "rateguard-ai")
         db_id = os.getenv("RATEGUARD_FIRESTORE_DATABASE")
-        _global_run_store = FirestoreRunStore(project_id=project_id, database_id=db_id)
+        kwargs = {"project_id": project_id, "database_id": db_id}
+        if collection_name:
+            kwargs["collection_name"] = collection_name
+        _global_run_store = FirestoreRunStore(**kwargs)
     return _global_run_store
 
 

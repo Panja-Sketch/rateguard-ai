@@ -305,7 +305,7 @@ def test_endpoint_returns_non_2xx_when_worker_raises_unexpectedly() -> None:
         mock_worker_cls.return_value.process_job.side_effect = RuntimeError("dispatcher bug")
         res = client.post("/internal/pubsub/assurance", json=envelope)
 
-    assert res.status_code >= 500
+    assert res.status_code == 503
     assert res.json()["status"] == ProcessingOutcome.RETRYABLE_FAILURE.value
 
 
@@ -329,7 +329,7 @@ def test_endpoint_worker_endpoint_never_returns_200_for_retryable_failure() -> N
         )
         res = client.post("/internal/pubsub/assurance", json=envelope)
 
-    assert res.status_code >= 500
+    assert res.status_code == 503
     assert res.json()["status"] == ProcessingOutcome.RETRYABLE_FAILURE.value
     assert res.json()["status_write_ok"] is False
 
@@ -356,3 +356,55 @@ def test_should_ack_matches_documented_contract(outcome: ProcessingOutcome) -> N
         ProcessingOutcome.CANCELLED,
     )
     assert result.should_ack is expected_ack
+
+
+# --- Exact outcome -> HTTP status mapping (Group 1 requirement) ------------
+#
+# Explicit table, independent of enum declaration order or any "first N"
+# slicing — this is the authoritative contract every ProcessingOutcome must
+# satisfy at the HTTP layer:
+_EXPECTED_HTTP_STATUS: dict[ProcessingOutcome, int] = {
+    ProcessingOutcome.SUCCEEDED: 200,
+    ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED: 200,
+    ProcessingOutcome.CANCELLED: 200,
+    ProcessingOutcome.RETRYABLE_FAILURE: 503,
+    ProcessingOutcome.TERMINAL_INVALID_MESSAGE: 400,
+}
+
+
+def test_expected_http_status_table_covers_every_outcome() -> None:
+    """Guards against a new ProcessingOutcome being added without also
+    deciding its HTTP status — both here and in production code."""
+    assert set(_EXPECTED_HTTP_STATUS.keys()) == set(ProcessingOutcome)
+
+
+@pytest.mark.parametrize("outcome", list(ProcessingOutcome))
+def test_outcome_http_status_constant_matches_expected_table(outcome: ProcessingOutcome) -> None:
+    """Directly checks the production OUTCOME_HTTP_STATUS constant (the
+    single source of truth `worker_endpoint.py` looks up) against the
+    explicit table above — not enum ordering, not should_ack plus a guess."""
+    from app.messaging.outcomes import OUTCOME_HTTP_STATUS
+
+    assert OUTCOME_HTTP_STATUS[outcome] == _EXPECTED_HTTP_STATUS[outcome]
+
+
+@pytest.mark.parametrize("outcome", list(ProcessingOutcome))
+def test_endpoint_returns_exact_http_status_for_every_outcome(outcome: ProcessingOutcome) -> None:
+    """End-to-end: POSTs a real envelope through /internal/pubsub/assurance
+    with AssuranceWorker.process_job mocked to return each possible
+    ProcessingResult outcome in turn, and asserts the exact HTTP status —
+    not just "2xx" or ">=500"."""
+    from app.messaging.outcomes import ProcessingResult
+
+    job = AssuranceJob(job_id=f"JOB-MATRIX-{outcome.value}", run_id=f"MIS-MATRIX-{outcome.value}", job_type="ASSURANCE_MISSION_V2")
+    b64_data = base64.b64encode(job.model_dump_json().encode("utf-8")).decode("utf-8")
+    envelope = {"message": {"data": b64_data, "message_id": f"MSG-MATRIX-{outcome.value}"}}
+
+    with patch("app.api.worker_endpoint.AssuranceWorker") as mock_worker_cls:
+        mock_worker_cls.return_value.process_job.return_value = ProcessingResult(
+            outcome=outcome, run_id=job.run_id, job_id=job.job_id,
+        )
+        res = client.post("/internal/pubsub/assurance", json=envelope)
+
+    assert res.status_code == _EXPECTED_HTTP_STATUS[outcome]
+    assert res.json()["status"] == outcome.value

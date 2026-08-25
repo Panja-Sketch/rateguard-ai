@@ -32,13 +32,45 @@ class ProcessingOutcome(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+# The single source of truth for outcome -> HTTP status. Deliberately an
+# explicit, exhaustive mapping keyed by enum VALUE — never derived from
+# declaration order or a "first N outcomes" slice, which is exactly the kind
+# of implicit logic that let a prior status report misdescribe this contract
+# (RETRYABLE_FAILURE sits third in declaration order but must NOT ack).
+#
+#   SUCCEEDED                   -> 200 (ack; Pub/Sub must not redeliver)
+#   DUPLICATE_ALREADY_PROCESSED -> 200 (ack; a duplicate delivery of an
+#                                  already-completed/already-leased mission
+#                                  must never trigger a second execution)
+#   CANCELLED                   -> 200 (ack; a safely cancelled mission must
+#                                  never be retried)
+#   RETRYABLE_FAILURE           -> 503 (do NOT ack; Firestore/Vertex
+#                                  transient failures, internal exceptions,
+#                                  or a failed best-effort status write must
+#                                  cause Pub/Sub to retry, never be silently
+#                                  swallowed into a false success)
+#   TERMINAL_INVALID_MESSAGE    -> 400 (do NOT ack; a malformed/poison
+#                                  envelope is retried by Pub/Sub up to the
+#                                  subscription's configured maximum delivery
+#                                  attempts, after which it becomes eligible
+#                                  for dead-letter forwarding — it must never
+#                                  be acknowledged as if it succeeded, nor
+#                                  treated as un-retryable at the HTTP layer,
+#                                  since dead-lettering is itself driven by
+#                                  repeated non-2xx delivery attempts)
+OUTCOME_HTTP_STATUS: dict[ProcessingOutcome, int] = {
+    ProcessingOutcome.SUCCEEDED: 200,
+    ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED: 200,
+    ProcessingOutcome.CANCELLED: 200,
+    ProcessingOutcome.RETRYABLE_FAILURE: 503,
+    ProcessingOutcome.TERMINAL_INVALID_MESSAGE: 400,
+}
+
 # Outcomes that must be acknowledged (HTTP 2xx) so Pub/Sub does not redeliver.
+# Derived from OUTCOME_HTTP_STATUS (not maintained as a second, independent
+# set) so the two can never drift out of sync with each other.
 ACK_OUTCOMES = frozenset(
-    {
-        ProcessingOutcome.SUCCEEDED,
-        ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED,
-        ProcessingOutcome.CANCELLED,
-    }
+    outcome for outcome, http_status in OUTCOME_HTTP_STATUS.items() if 200 <= http_status < 300
 )
 
 

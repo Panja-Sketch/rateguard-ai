@@ -3,11 +3,11 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from app.messaging import AssuranceJob, AssuranceWorker
-from app.messaging.outcomes import ProcessingOutcome, safe_error_text
+from app.messaging.outcomes import OUTCOME_HTTP_STATUS, ProcessingOutcome, safe_error_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/pubsub", tags=["internal-worker"])
@@ -35,15 +35,17 @@ def process_pubsub_assurance_job(envelope: PubSubPushEnvelope, response: Respons
     Designed for authenticated invocation from Google Cloud Pub/Sub push subscriptions
     or Cloud Run service-to-service IAM invocation.
 
-    HTTP status reflects the worker's `ProcessingResult.should_ack`, NOT an
-    unconditional 200. Pub/Sub treats any non-2xx response as "redeliver this
-    message", and — once the subscription's configured maximum delivery
-    attempts is exceeded — routes it to the dead-letter topic instead of
-    silently discarding it. A prior version of this endpoint always returned
-    200 regardless of what `AssuranceWorker.process_job` actually did, which
-    acknowledged (and therefore permanently and silently discarded) messages
-    that failed for retryable reasons — a Firestore outage chief among them.
-    See the deployment-parity diagnosis this endpoint's behavior fixes.
+    HTTP status is looked up explicitly per outcome via
+    `app.messaging.outcomes.OUTCOME_HTTP_STATUS` — NOT an unconditional 200,
+    and not inferred from enum declaration order. Pub/Sub treats any non-2xx
+    response as "redeliver this message", and — once the subscription's
+    configured maximum delivery attempts is exceeded — routes it to the
+    dead-letter topic instead of silently discarding it. A prior version of
+    this endpoint always returned 200 regardless of what
+    `AssuranceWorker.process_job` actually did, which acknowledged (and
+    therefore permanently and silently discarded) messages that failed for
+    retryable reasons — a Firestore outage chief among them. See the
+    deployment-parity diagnosis this endpoint's behavior fixes.
     """
     try:
         raw_bytes = base64.b64decode(envelope.message.data)
@@ -57,7 +59,7 @@ def process_pubsub_assurance_job(envelope: PubSubPushEnvelope, response: Respons
         # delivery attempts, instead of being silently discarded as if it had
         # succeeded.
         logger.error("POISON_MESSAGE: Failed to decode Pub/Sub envelope data: %s", safe_error_text(e))
-        response.status_code = status.HTTP_400_BAD_REQUEST
+        response.status_code = OUTCOME_HTTP_STATUS[ProcessingOutcome.TERMINAL_INVALID_MESSAGE]
         return {
             "status": ProcessingOutcome.TERMINAL_INVALID_MESSAGE.value,
             "error": "Invalid Pub/Sub job message payload.",
@@ -78,7 +80,7 @@ def process_pubsub_assurance_job(envelope: PubSubPushEnvelope, response: Respons
             "UNEXPECTED_WORKER_EXCEPTION: job_id='%s' run_id='%s': %s",
             job.job_id, job.run_id, safe_error_text(e),
         )
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        response.status_code = OUTCOME_HTTP_STATUS[ProcessingOutcome.RETRYABLE_FAILURE]
         return {
             "status": ProcessingOutcome.RETRYABLE_FAILURE.value,
             "job_id": job.job_id,
@@ -86,12 +88,10 @@ def process_pubsub_assurance_job(envelope: PubSubPushEnvelope, response: Respons
             "error": "Unexpected worker exception.",
         }
 
-    if result.outcome == ProcessingOutcome.TERMINAL_INVALID_MESSAGE:
-        response.status_code = status.HTTP_400_BAD_REQUEST
-    elif result.should_ack:
-        response.status_code = status.HTTP_200_OK
-    else:
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Explicit, exhaustive lookup — never derived from should_ack + an
+    # else-branch guess, so every ProcessingOutcome's HTTP status is a single
+    # unambiguous fact in one place (see OUTCOME_HTTP_STATUS).
+    response.status_code = OUTCOME_HTTP_STATUS[result.outcome]
 
     return {
         "status": result.outcome.value,

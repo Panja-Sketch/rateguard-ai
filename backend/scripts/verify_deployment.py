@@ -156,11 +156,16 @@ def check_worker_endpoint_never_acks_retryable_failure() -> CheckResult:
             )
             res = client.post("/internal/pubsub/assurance", json=envelope)
 
-        if 200 <= res.status_code < 300:
+        from app.messaging.outcomes import OUTCOME_HTTP_STATUS
+
+        expected_status = OUTCOME_HTTP_STATUS[ProcessingOutcome.RETRYABLE_FAILURE]
+        if res.status_code != expected_status:
             return _result(
                 "worker_endpoint_ack_semantics", False,
-                f"A RETRYABLE_FAILURE ProcessingResult produced HTTP {res.status_code} — "
-                "the endpoint would acknowledge a failed delivery as if it succeeded.",
+                f"A RETRYABLE_FAILURE ProcessingResult produced HTTP {res.status_code}, "
+                f"expected exactly {expected_status} — the endpoint would either "
+                "acknowledge a failed delivery as if it succeeded, or return the wrong "
+                "non-2xx code.",
             )
         body = res.json()
         if body.get("status") != ProcessingOutcome.RETRYABLE_FAILURE.value:
@@ -170,7 +175,7 @@ def check_worker_endpoint_never_acks_retryable_failure() -> CheckResult:
             )
         return _result(
             "worker_endpoint_ack_semantics", True,
-            f"RETRYABLE_FAILURE correctly produced HTTP {res.status_code} (non-2xx).",
+            f"RETRYABLE_FAILURE correctly produced HTTP {res.status_code}.",
         )
     except Exception as e:
         return _result("worker_endpoint_ack_semantics", False, f"Check itself failed: {e}")
