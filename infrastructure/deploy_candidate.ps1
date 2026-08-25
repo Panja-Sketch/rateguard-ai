@@ -24,6 +24,14 @@ $STAGING_DLQ_TOPIC = "assurance-runs-staging-dlq"
 $STAGING_DLQ_INSPECTION_SUBSCRIPTION = "assurance-runs-staging-dlq-inspect"
 $STAGING_FIRESTORE_COLLECTION = "assurance_runs_staging"
 
+# Separate dataset (not just separate tables in the production dataset) and a
+# separate bucket -- see deploy_candidate.sh for the full rationale. Same
+# table names as production, isolated by living in a different dataset.
+$STAGING_BIGQUERY_DATASET = "rateguard_staging"
+$STAGING_BIGQUERY_PORTFOLIO_TABLE = "synthetic_policies"
+$STAGING_BIGQUERY_RESULTS_TABLE = "portfolio_exposure_results"
+$STAGING_GCS_BUCKET = "rateguard-ai-artifacts-staging"
+
 $ACK_DEADLINE_SECONDS = 600
 $MIN_RETRY_BACKOFF_SECONDS = 10
 $MAX_RETRY_BACKOFF_SECONDS = 600
@@ -60,6 +68,10 @@ function Write-Plan {
     Write-Host "  Dead-letter topic:             $STAGING_DLQ_TOPIC"
     Write-Host "  Dead-letter inspection sub:    $STAGING_DLQ_INSPECTION_SUBSCRIPTION"
     Write-Host "  Firestore collection:          $STAGING_FIRESTORE_COLLECTION"
+    Write-Host "  BigQuery dataset:              $STAGING_BIGQUERY_DATASET"
+    Write-Host "  BigQuery portfolio table:      $STAGING_BIGQUERY_DATASET.$STAGING_BIGQUERY_PORTFOLIO_TABLE"
+    Write-Host "  BigQuery results table:        $STAGING_BIGQUERY_DATASET.$STAGING_BIGQUERY_RESULTS_TABLE"
+    Write-Host "  GCS artifact bucket:           $STAGING_GCS_BUCKET"
     Write-Host "  Ack deadline:                  ${ACK_DEADLINE_SECONDS}s"
     Write-Host "  Retry backoff:                 ${MIN_RETRY_BACKOFF_SECONDS}s - ${MAX_RETRY_BACKOFF_SECONDS}s"
     Write-Host "  Max delivery attempts:         $MAX_DELIVERY_ATTEMPTS"
@@ -74,6 +86,10 @@ function Write-Plan {
     Write-Host "  RATEGUARD_FIRESTORE_COLLECTION=$STAGING_FIRESTORE_COLLECTION"
     Write-Host "  RATEGUARD_PUBSUB_TOPIC=$STAGING_TOPIC"
     Write-Host "  RATEGUARD_PUBSUB_SUBSCRIPTION=$STAGING_SUBSCRIPTION"
+    Write-Host "  RATEGUARD_BIGQUERY_DATASET=$STAGING_BIGQUERY_DATASET"
+    Write-Host "  RATEGUARD_BIGQUERY_PORTFOLIO_TABLE=$STAGING_BIGQUERY_PORTFOLIO_TABLE"
+    Write-Host "  RATEGUARD_BIGQUERY_RESULTS_TABLE=$STAGING_BIGQUERY_RESULTS_TABLE"
+    Write-Host "  RATEGUARD_GCS_BUCKET=$STAGING_GCS_BUCKET"
     Write-Host "  (all other values inherited from infrastructure/runtime-env.yaml)"
     Write-Host ""
     Write-Host "Exact commands that -DeployCandidate would run, in order:"
@@ -81,18 +97,20 @@ function Write-Plan {
     Write-Host "  2) gcloud run deploy rateguard-api --image $BACKEND_IMAGE --region $REGION --no-traffic --tag $CANDIDATE_TAG --service-account $RUNTIME_SA --env-vars-file=$CANDIDATE_ENV_FILE"
     Write-Host "     gcloud run deploy rateguard-worker --image $BACKEND_IMAGE --region $REGION --no-traffic --tag $CANDIDATE_TAG --service-account $RUNTIME_SA --env-vars-file=$CANDIDATE_ENV_FILE"
     Write-Host "  3) Idempotent create/update: $STAGING_TOPIC, $STAGING_DLQ_TOPIC, $STAGING_SUBSCRIPTION (push -> candidate-tagged worker URL only), $STAGING_DLQ_INSPECTION_SUBSCRIPTION, narrow DLQ IAM bindings"
-    Write-Host "  4) gcloud builds submit ./frontend --config=./frontend/cloudbuild.yaml --substitutions=_IMAGE_TAG=$IMAGE_TAG,_NEXT_PUBLIC_RATEGUARD_API_URL=<candidate-api-tagged-url>"
+    Write-Host "  4) Idempotently provision $STAGING_BIGQUERY_DATASET dataset/tables (python backend/scripts/setup_bigquery.py) and load ONLY the synthetic demo portfolio (python backend/scripts/upload_synthetic_portfolio_bigquery.py); idempotently create gs://$STAGING_GCS_BUCKET"
+    Write-Host "  5) gcloud builds submit ./frontend --config=./frontend/cloudbuild.yaml --substitutions=_IMAGE_TAG=$IMAGE_TAG,_NEXT_PUBLIC_RATEGUARD_API_URL=<candidate-api-tagged-url>"
     Write-Host "     gcloud run deploy rateguard-web --image $FRONTEND_IMAGE --region $REGION --no-traffic --tag $CANDIDATE_TAG"
     Write-Host ""
     Write-Host "NOT done by this script, ever: no production traffic change, no change"
-    Write-Host "to the production Pub/Sub push config, no API key, no promotion."
+    Write-Host "to the production Pub/Sub push config, no write to the production BigQuery"
+    Write-Host "dataset ('rateguard') or bucket ('rateguard-ai-artifacts'), no API key, no promotion."
     Write-Host ""
     Write-Host "Re-run with no arguments to see this plan again. Pass -DeployCandidate to execute."
 }
 
 function Write-CandidateEnvFile {
     $lines = Get-Content infrastructure/runtime-env.yaml | Where-Object {
-        $_ -notmatch '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE):'
+        $_ -notmatch '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE|RATEGUARD_BIGQUERY_DATASET|RATEGUARD_BIGQUERY_PORTFOLIO_TABLE|RATEGUARD_BIGQUERY_RESULTS_TABLE|RATEGUARD_GCS_BUCKET):'
     }
     $lines | Set-Content -Encoding utf8 $CANDIDATE_ENV_FILE
     Add-Content -Encoding utf8 $CANDIDATE_ENV_FILE @"
@@ -105,6 +123,10 @@ RATEGUARD_RUN_STORE: "firestore"
 RATEGUARD_PUBSUB_TOPIC: "$STAGING_TOPIC"
 RATEGUARD_PUBSUB_SUBSCRIPTION: "$STAGING_SUBSCRIPTION"
 RATEGUARD_FIRESTORE_COLLECTION: "$STAGING_FIRESTORE_COLLECTION"
+RATEGUARD_BIGQUERY_DATASET: "$STAGING_BIGQUERY_DATASET"
+RATEGUARD_BIGQUERY_PORTFOLIO_TABLE: "$STAGING_BIGQUERY_PORTFOLIO_TABLE"
+RATEGUARD_BIGQUERY_RESULTS_TABLE: "$STAGING_BIGQUERY_RESULTS_TABLE"
+RATEGUARD_GCS_BUCKET: "$STAGING_GCS_BUCKET"
 "@
 }
 
@@ -184,7 +206,26 @@ function Deploy-Candidate {
     gcloud pubsub subscriptions add-iam-policy-binding "$STAGING_SUBSCRIPTION" `
         --member="serviceAccount:$PUBSUB_SERVICE_AGENT" --role="roles/pubsub.subscriber" | Out-Null
 
-    Write-Host "5. Building and deploying candidate frontend (--no-traffic --tag $CANDIDATE_TAG)..."
+    Write-Host "5. Idempotently provisioning isolated staging BigQuery dataset/tables and"
+    Write-Host "   loading ONLY the synthetic demonstration portfolio (never production data)..."
+    $env:RATEGUARD_BIGQUERY_DATASET = $STAGING_BIGQUERY_DATASET
+    $env:RATEGUARD_BIGQUERY_PORTFOLIO_TABLE = $STAGING_BIGQUERY_PORTFOLIO_TABLE
+    $env:RATEGUARD_BIGQUERY_RESULTS_TABLE = $STAGING_BIGQUERY_RESULTS_TABLE
+    python backend/scripts/setup_bigquery.py
+    python backend/scripts/upload_synthetic_portfolio_bigquery.py
+    Remove-Item Env:\RATEGUARD_BIGQUERY_DATASET, Env:\RATEGUARD_BIGQUERY_PORTFOLIO_TABLE, Env:\RATEGUARD_BIGQUERY_RESULTS_TABLE -ErrorAction SilentlyContinue
+
+    Write-Host "6. Idempotently creating isolated staging GCS artifact bucket..."
+    $bucketExists = $null
+    try { $bucketExists = gcloud storage buckets describe "gs://$STAGING_GCS_BUCKET" --format="value(name)" 2>$null } catch {}
+    if (-not $bucketExists) {
+        gcloud storage buckets create "gs://$STAGING_GCS_BUCKET" `
+            --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
+    } else {
+        Write-Host "   Bucket gs://$STAGING_GCS_BUCKET already exists."
+    }
+
+    Write-Host "7. Building and deploying candidate frontend (--no-traffic --tag $CANDIDATE_TAG)..."
     gcloud builds submit ./frontend --config=./frontend/cloudbuild.yaml `
         --substitutions=_IMAGE_TAG="$IMAGE_TAG",_NEXT_PUBLIC_RATEGUARD_API_URL="$CANDIDATE_API_URL"
     gcloud run deploy rateguard-web `

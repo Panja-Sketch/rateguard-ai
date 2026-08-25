@@ -60,8 +60,28 @@ def test_deploy_candidate_plan_uses_isolated_staging_resource_names() -> None:
         "assurance-runs-staging-dlq",
         "assurance-runs-staging-dlq-inspect",
         "assurance_runs_staging",
+        "rateguard_staging",
+        "rateguard-ai-artifacts-staging",
     ):
         assert expected in result.stdout, f"missing isolated staging resource name: {expected}"
+
+
+def test_deploy_candidate_plan_never_targets_production_bigquery_or_bucket() -> None:
+    """The production BigQuery dataset name and artifact bucket name must
+    only ever appear inside an explicit "NOT done" disclaimer, never as
+    something --deploy-candidate would actually write to."""
+    result = _run_bash_script("infrastructure/deploy_candidate.sh")
+    assert "No write to the production BigQuery dataset" in result.stdout
+    assert "rateguard-ai-artifacts-staging" in result.stdout
+    assert "RATEGUARD_BIGQUERY_DATASET=rateguard_staging" in result.stdout
+    assert "RATEGUARD_GCS_BUCKET=rateguard-ai-artifacts-staging" in result.stdout
+
+
+def test_deploy_candidate_plan_loads_only_synthetic_demonstration_portfolio() -> None:
+    result = _run_bash_script("infrastructure/deploy_candidate.sh")
+    assert "synthetic demonstration portfolio" in result.stdout
+    assert "upload_synthetic_portfolio_bigquery.py" in result.stdout
+    assert "setup_bigquery.py" in result.stdout
 
 
 def test_deploy_candidate_plan_never_names_production_topic_as_the_target() -> None:

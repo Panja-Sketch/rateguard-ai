@@ -357,6 +357,72 @@ def get_assurance_mission(mission_id: str) -> dict[str, Any]:
     }
 
 
+# Explicit whitelist of GeminiInvocationEvidence fields this endpoint is
+# allowed to surface. Anything not listed here (rationale, confidence,
+# needs_human_review, and the raw prompt/response the evidence was ever
+# derived from — which GeminiInvocationEvidence never even stores) is
+# deliberately excluded. Adding a field here is a conscious security review,
+# not a default.
+_SAFE_GEMINI_EVIDENCE_FIELDS = (
+    "decision_type",
+    "model_id",
+    "invocation_id",
+    "response_id",
+    "schema_valid",
+    "success",
+    "failure_category",
+    "requested_tool",
+    "started_at",
+    "ended_at",
+    "latency_ms",
+    "input_tokens",
+    "output_tokens",
+)
+
+
+@router.get("/missions/{mission_id}/evidence")
+def get_mission_gemini_evidence(mission_id: str) -> dict[str, Any]:
+    """Read-only, sanitized Gemini decision evidence for one mission.
+
+    Intended for authorized candidate/staging deployment verification (see
+    backend/scripts/verify_candidate.py), which needs proof that a real
+    Gemini decision occurred — not a fallback — without this endpoint ever
+    becoming a channel for leaking prompts, raw model output, credentials,
+    or policy/pricing payloads. Every returned object is built from an
+    explicit field whitelist (`_SAFE_GEMINI_EVIDENCE_FIELDS`); nothing from
+    the underlying `EvidenceRecord.data_summary` is passed through
+    unfiltered. `rationale` and `confidence` are intentionally never
+    returned here, even though they are user-facing fields elsewhere in this
+    API — this endpoint's contract is deliberately narrower than "whatever
+    is safe", it is exactly this fixed list.
+    """
+    store = get_run_store()
+    record = store.get_run(mission_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assurance mission '{mission_id}' not found.",
+        )
+
+    from app.storage import EvidenceType
+
+    evidence_records = store.get_evidence(mission_id)
+    invocations = []
+    for ev in evidence_records:
+        if ev.evidence_type != EvidenceType.GEMINI_INVOCATION:
+            continue
+        raw = ev.data_summary if isinstance(ev.data_summary, dict) else {}
+        sanitized = {field: raw.get(field) for field in _SAFE_GEMINI_EVIDENCE_FIELDS}
+        sanitized["evidence_id"] = ev.evidence_id
+        invocations.append(sanitized)
+
+    return {
+        "mission_id": mission_id,
+        "gemini_invocation_count": len(invocations),
+        "gemini_invocations": invocations,
+    }
+
+
 @router.post("/missions/{mission_id}/cancel")
 def cancel_assurance_mission(mission_id: str) -> dict[str, Any]:
     """Cancels a mission. QUEUED/VALIDATING/WAITING_RETRY/DRAFT transition directly to

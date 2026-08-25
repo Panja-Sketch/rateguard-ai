@@ -18,14 +18,20 @@ is what actually confines every side effect to staging resources — this
 script has no direct Pub/Sub or Firestore access of its own and never needs
 any.
 
+Real Gemini decision evidence (schema_valid, response_id presence, latency,
+token counts) is verified via GET /api/v1/missions/{id}/evidence — a
+sanitized, read-only endpoint that whitelists exactly those fields and never
+returns prompts, raw model output, credentials, or rationale/confidence text
+(see app.api.missions.get_mission_gemini_evidence).
+
 Scope limitation (documented, not silently skipped): items that would require
 direct Pub/Sub publish access (inducing a genuine duplicate delivery) or a
-dedicated evidence/events-listing API (schema_valid, raw response_id,
-persisted per-stage event timeline) are not exposable through the public
+dedicated per-stage events-listing API are not exposable through the public
 HTTP surface this script is restricted to. Those specific sub-checks are
-reported as BEST-EFFORT / NOT-VERIFIABLE-VIA-API rather than faked as PASS.
-The stronger, direct-access versions of those checks already exist as this
-repository's own pytest suite (test_worker_delivery_outcomes.py).
+reported as BEST-EFFORT / proxy checks rather than faked as a full PASS. The
+stronger, direct-access version of the duplicate-delivery check already
+exists as this repository's own pytest suite
+(test_worker_delivery_outcomes.py).
 
 Does NOT test malformed/poison DLQ delivery — that is intentionally a
 separate, explicitly destructive-to-staging-only script
@@ -190,22 +196,28 @@ def check_persisted_events_proxy(report: Report, mission_detail: dict) -> None:
     )
 
 
-def check_real_gemini_decision(report: Report, mission_detail: dict) -> None:
-    result = mission_detail.get("result", {})
-    agent_actions = result.get("agent_execution", {}).get("data") or []
+def check_real_gemini_decision(report: Report, api_url: str, mission_id: str) -> None:
+    """Uses the sanitized GET /missions/{id}/evidence endpoint (see
+    app.api.missions.get_mission_gemini_evidence) rather than inferring from
+    agent_execution alone — this is the one place schema_valid and
+    response_id are actually exposed and independently verifiable."""
+    status_code, body = _http("GET", f"{api_url}/api/v1/missions/{mission_id}/evidence")
+    invocations = body.get("gemini_invocations", []) if status_code == 200 else []
     candidates = [
-        a for a in agent_actions
-        if a.get("is_gemini_decision") is True
-        and a.get("is_fallback") is False
-        and a.get("model_id") == EXPECTED_GEMINI_MODEL
-        and a.get("invocation_id")
+        inv for inv in invocations
+        if inv.get("success") is True
+        and inv.get("model_id") == EXPECTED_GEMINI_MODEL
+        and inv.get("invocation_id")
+        and inv.get("schema_valid") is True
     ]
-    ok = len(candidates) > 0
+    ok = status_code == 200 and len(candidates) > 0
+    example = candidates[0] if candidates else None
     report.add(
         "real_gemini_decision_present", ok,
-        f"{len(candidates)} action(s) match model_id={EXPECTED_GEMINI_MODEL}, invocation_id set, is_fallback=False "
-        "(schema_valid/response_id are not exposed by this API surface — NOT independently verifiable here; "
-        "see GeminiInvocationEvidence / EvidenceRecord, which has no public listing endpoint)",
+        f"HTTP {status_code}, {len(invocations)} total invocation(s), {len(candidates)} matching "
+        f"model_id={EXPECTED_GEMINI_MODEL}+schema_valid+invocation_id+success. "
+        f"response_id_present={bool(example and example.get('response_id'))}, "
+        f"latency_ms={example.get('latency_ms') if example else None}",
     )
 
 
@@ -392,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if mission_detail:
         check_persisted_events_proxy(report, mission_detail)
-        check_real_gemini_decision(report, mission_detail)
+        check_real_gemini_decision(report, args.api_url, mission_id)
         check_premium_mismatch_and_block(report, mission_detail)
         check_portfolio_impact_present(report, mission_detail)
         check_remediation_and_revalidation_present(report, mission_detail)
