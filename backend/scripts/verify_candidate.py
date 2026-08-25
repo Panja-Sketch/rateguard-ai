@@ -54,6 +54,9 @@ from dataclasses import dataclass, field
 
 EXPECTED_GEMINI_MODEL = "gemini-3.7-flash"
 EXPECTED_FRAMEWORK_SUBSTRING = "Google GenAI SDK"
+EXPECTED_PROVIDER = "Google Vertex AI"
+EXPECTED_AUTH_MODE = "VERTEX_AI"
+EXPECTED_LOCATION = "global"
 DEMO_SOURCE_A = "AZ_HO3_2026_09"
 DEMO_SOURCE_B_DEFECTIVE = "AZ_HO3_2026_09_DEFECTIVE"
 
@@ -120,19 +123,38 @@ def check_health_ready(report: Report, api_url: str) -> None:
 
 
 def check_system_status(report: Report, api_url: str) -> None:
+    """Validates the structured `gemini` sub-object of /api/v1/system/status
+    field by field (exact model id, provider, framework, auth mode, and the
+    effective Gemini *location* - never the general Cloud Run/GCP deployment
+    region) rather than a loose substring match over the whole response,
+    which previously passed even when the reported values were wrong."""
     status_code, body = _http("GET", f"{api_url}/api/v1/system/status")
+    gemini = body.get("gemini", {}) if isinstance(body, dict) else {}
     raw_text = json.dumps(body)
 
-    model_ok = body.get("gemini", {}).get("model") == EXPECTED_GEMINI_MODEL or EXPECTED_GEMINI_MODEL in raw_text
-    framework_ok = EXPECTED_FRAMEWORK_SUBSTRING in raw_text
-    vertex_ok = "vertex" in raw_text.lower() or "auth_mode" in raw_text.lower()
+    model_ok = gemini.get("configured_model_id") == EXPECTED_GEMINI_MODEL
+    provider_ok = gemini.get("provider") == EXPECTED_PROVIDER
+    framework_ok = EXPECTED_FRAMEWORK_SUBSTRING in (gemini.get("framework") or "")
+    auth_mode_ok = gemini.get("auth_mode") == EXPECTED_AUTH_MODE
+    location_ok = gemini.get("configured_location") == EXPECTED_LOCATION
+    probe_not_invoked = gemini.get("endpoint_probe_invoked") is False
     no_secrets = not any(marker in raw_text for marker in _SECRET_LIKE_SUBSTRINGS)
 
-    ok = status_code == 200 and model_ok and framework_ok and no_secrets
+    ok = (
+        status_code == 200
+        and model_ok
+        and provider_ok
+        and framework_ok
+        and auth_mode_ok
+        and location_ok
+        and probe_not_invoked
+        and no_secrets
+    )
     report.add(
         "system_status", ok,
-        f"HTTP {status_code}, model_ok={model_ok}, framework_ok={framework_ok}, "
-        f"vertex_mentioned={vertex_ok}, no_secret_markers={no_secrets}",
+        f"HTTP {status_code}, model_ok={model_ok}, provider_ok={provider_ok}, framework_ok={framework_ok}, "
+        f"auth_mode_ok={auth_mode_ok}, location_ok={location_ok}, endpoint_probe_invoked_false={probe_not_invoked}, "
+        f"no_secret_markers={no_secrets}",
     )
 
 

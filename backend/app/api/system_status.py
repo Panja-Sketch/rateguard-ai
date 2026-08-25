@@ -4,7 +4,7 @@ Unlike /health/live and /health/ready (fast, unauthenticated-safe probes), this
 endpoint reports richer configuration/diagnostic detail intended for operators
 debugging deployment issues (e.g. the "Mission V2 records remain QUEUED" class
 of problem). It intentionally never performs a billable Gemini generation call
-or a full BigQuery query — only configuration/reachability is reported. It never
+or a full BigQuery query - only configuration/reachability is reported. It never
 exposes secret values, service account keys, or auth headers.
 """
 
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/v1/system", tags=["system-status"])
 @router.get("/status")
 def get_system_status() -> dict[str, Any]:
     """Detailed dependency diagnostics: Firestore, Pub/Sub configuration, worker
-    heartbeat (per-mission, not a global signal — see note below), Gemini
+    heartbeat (per-mission, not a global signal - see note below), Gemini
     configuration (model id only, no invocation), BigQuery, and GCS. No secret
     values are ever included."""
     settings = get_settings()
@@ -52,7 +52,7 @@ def _run_store_status() -> dict[str, Any]:
             "firestore_client_constructed": firestore_client_ready,
             "note": (
                 "If firestore_client_constructed is false, this instance silently fell back to a "
-                "per-instance, non-durable InMemoryRunStore — a mission created on one instance "
+                "per-instance, non-durable InMemoryRunStore - a mission created on one instance "
                 "would be invisible to a worker instance with its own separate in-memory store."
                 if firestore_client_ready is False
                 else None
@@ -72,7 +72,7 @@ def _message_queue_status(settings: Any) -> dict[str, Any]:
         "note": (
             "This endpoint reports configured names only, not live Pub/Sub API "
             "reachability (that requires IAM-scoped 'gcloud pubsub subscriptions "
-            "describe' — see the read-only diagnostic commands in the implementation "
+            "describe' - see the read-only diagnostic commands in the implementation "
             "report). Auth for the push subscription is enforced at the Cloud Run IAM "
             "layer (--no-allow-unauthenticated + run.invoker for the push service "
             "account), not inside this application."
@@ -93,16 +93,26 @@ def _worker_heartbeat_note() -> dict[str, Any]:
 
 
 def _gemini_status() -> dict[str, Any]:
+    """Reports the AI runtime configuration via GeminiDecisionClient.describe_runtime()
+    - the SAME auth-mode resolution logic that a real mission's Gemini calls use - so
+    this report can never drift from what actually executes. Never invokes Gemini,
+    never validates credentials, never constructs a google.genai.Client, and never
+    makes any network call; see GeminiDecisionClient.describe_runtime()'s docstring."""
     try:
         from app.agents.config import get_agent_config
+        from app.agents.gemini_client import GeminiDecisionClient
 
         cfg = get_agent_config()
+        client = GeminiDecisionClient(cfg)
+        runtime = client.describe_runtime()
         return {
-            "configured_model_id": cfg.gemini_model,
-            "agent_enabled": cfg.agent_enabled,
-            "location": cfg.location,
-            "invoked": False,
-            "note": "Model ID reported from configuration only; no generation call is made by this endpoint.",
+            **runtime,
+            "endpoint_probe_invoked": False,
+            "note": (
+                "Configuration only, resolved via the same auth-mode logic GeminiDecisionClient "
+                "uses for real calls. This endpoint never invokes Gemini, validates credentials, "
+                "constructs a model client, or makes any network call."
+            ),
         }
     except Exception as e:
         return {"error": str(e)}

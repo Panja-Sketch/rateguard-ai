@@ -130,6 +130,57 @@ class GeminiDecisionClient:
             return AUTH_MODE_API_KEY, {"api_key": api_key}
         return AUTH_MODE_NONE, {}
 
+    def describe_runtime(self) -> dict[str, Any]:
+        """Reports the AI runtime this client would use for its next call —
+        model id, provider, framework, resolved auth mode, and (for Vertex AI
+        only) the effective location — using the exact same
+        `_resolve_auth_mode()` this class's own `decide()` uses, so runtime
+        execution and this report can never drift apart.
+
+        Read-only by construction: reads only `self.config` and environment
+        variables already read by `_resolve_auth_mode()`. Never constructs a
+        `google.genai.Client`, never makes a network call, never validates a
+        credential, and never returns a credential value (only the enum-like
+        `auth_mode` label). Safe to call from a diagnostics endpoint.
+
+        A disabled agent short-circuits to AUTH_MODE_NONE here too, matching
+        `decide()`'s own behavior — when disabled, `decide()` never reaches
+        `_resolve_auth_mode()`, so reporting whatever credentials happen to
+        be present would misleadingly suggest Gemini could be reached when
+        it will not be invoked at all.
+        """
+        if not self.config.agent_enabled:
+            auth_mode = AUTH_MODE_NONE
+        else:
+            auth_mode, _ = self._resolve_auth_mode()
+
+        if auth_mode == AUTH_MODE_VERTEX_AI:
+            provider = "Google Vertex AI"
+            # The google-genai SDK's Vertex AI mode (`Client(vertexai=True)`)
+            # resolves project/location from these exact env vars when no
+            # explicit kwargs are passed — which is how every real call in
+            # `decide()` constructs its client. This is deliberately NOT
+            # `settings.google_cloud_region` (the general Cloud Run/GCP
+            # deployment region, e.g. "us-central1") — that is a different
+            # concept and reporting it here as the Gemini location is exactly
+            # the defect this method fixes.
+            configured_location = os.getenv("GOOGLE_CLOUD_LOCATION")
+        elif auth_mode == AUTH_MODE_API_KEY:
+            provider = "Google Gemini API"
+            configured_location = None  # the Gemini Developer API has no location concept
+        else:
+            provider = "Not configured"
+            configured_location = None
+
+        return {
+            "configured_model_id": self.config.gemini_model,
+            "provider": provider,
+            "framework": "Google GenAI SDK (google-genai structured output)",
+            "auth_mode": auth_mode,
+            "configured_location": configured_location,
+            "agent_enabled": self.config.agent_enabled,
+        }
+
     def decide(
         self,
         decision_type: str,

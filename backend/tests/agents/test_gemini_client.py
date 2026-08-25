@@ -232,3 +232,106 @@ def test_no_credentials_short_circuits_before_touching_any_client(monkeypatch):
     assert decision is None
     assert evidence.failure_category == FAILURE_NO_CREDENTIALS
     assert evidence.auth_mode == AUTH_MODE_NONE
+
+
+class TestDescribeRuntime:
+    """Focused tests for GeminiDecisionClient.describe_runtime() -- the
+    single source of truth /api/v1/system/status now reads from, so that
+    endpoint and real decide() calls can never report different auth modes
+    or locations. Every test here monkeypatches only environment variables
+    and never reaches google.genai.Client() -- describe_runtime() must not
+    either (see test_describe_runtime_never_constructs_a_client below)."""
+
+    @staticmethod
+    def _clear_auth_env(monkeypatch):
+        for var in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_LOCATION"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_vertex_ai_configuration(self, monkeypatch):
+        self._clear_auth_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()
+
+        assert runtime["configured_model_id"] == "gemini-3.7-flash"
+        assert runtime["provider"] == "Google Vertex AI"
+        assert "Google GenAI SDK" in runtime["framework"]
+        assert runtime["auth_mode"] == AUTH_MODE_VERTEX_AI
+        assert runtime["configured_location"] == "global"
+        assert runtime["agent_enabled"] is True
+
+    def test_global_location_is_reported_exactly_as_configured_not_the_gcp_region(self, monkeypatch):
+        """Regression: the candidate/production deployment sets
+        GOOGLE_CLOUD_LOCATION=global (see infrastructure/runtime-env.yaml),
+        which is what GeminiDecisionClient's own Vertex AI client resolution
+        actually uses -- never the general Cloud Run/GCP deployment region
+        (e.g. 'us-central1'), which is a different, unrelated setting."""
+        self._clear_auth_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()
+
+        assert runtime["configured_location"] == "global"
+        assert runtime["configured_location"] != "us-central1"
+
+    def test_api_key_configuration(self, monkeypatch):
+        self._clear_auth_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_API_KEY", "fake-key-value")
+
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()
+
+        assert runtime["provider"] == "Google Gemini API"
+        assert runtime["auth_mode"] == AUTH_MODE_API_KEY
+        # The Gemini Developer API has no location concept -- must not
+        # fabricate one, and must never echo the API key itself.
+        assert runtime["configured_location"] is None
+        assert "fake-key-value" not in str(runtime)
+
+    def test_disabled_or_no_auth_configuration(self, monkeypatch):
+        self._clear_auth_env(monkeypatch)
+
+        # No credentials configured at all, agent enabled.
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()
+        assert runtime["auth_mode"] == AUTH_MODE_NONE
+        assert runtime["provider"] == "Not configured"
+        assert runtime["configured_location"] is None
+
+        # Agent explicitly disabled, even with Vertex AI credentials present --
+        # decide() would never reach _resolve_auth_mode() in this case, so
+        # describe_runtime() must not misleadingly report VERTEX_AI either.
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        disabled_client = GeminiDecisionClient(AgentConfig(agent_enabled=False))
+        disabled_runtime = disabled_client.describe_runtime()
+        assert disabled_runtime["auth_mode"] == AUTH_MODE_NONE
+        assert disabled_runtime["agent_enabled"] is False
+
+    def test_describe_runtime_never_constructs_a_client_or_touches_the_network(self, monkeypatch):
+        self._clear_auth_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+        def _fail_if_constructed(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("describe_runtime() must never construct a google.genai.Client")
+
+        monkeypatch.setattr("google.genai.Client", _fail_if_constructed)
+
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()  # must not raise
+        assert runtime["auth_mode"] == AUTH_MODE_VERTEX_AI
+
+    def test_describe_runtime_never_exposes_secret_shaped_values(self, monkeypatch):
+        self._clear_auth_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIzaFAKESECRETVALUEDONOTUSE0000")
+
+        client = GeminiDecisionClient(AgentConfig(agent_enabled=True))
+        runtime = client.describe_runtime()
+
+        serialized = str(runtime)
+        for forbidden in ("AIza", "Bearer ", "-----BEGIN", "AIzaFAKESECRETVALUEDONOTUSE0000"):
+            assert forbidden not in serialized
