@@ -3,8 +3,14 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { getAssuranceMission, ApiError } from '@/lib/api/client';
-import { AssuranceResultV2 } from '@/lib/types/assurance';
+import {
+  getAssuranceMission,
+  getAssuranceRunEvents,
+  cancelAssuranceMission,
+  retryAssuranceMission,
+  ApiError,
+} from '@/lib/api/client';
+import { AssuranceMissionDetail, AssuranceResultV2, WorkflowEvent } from '@/lib/types/assurance';
 import { MissionErrorBoundary } from '@/components/assurance/MissionErrorBoundary';
 import { SemanticDiffViewer } from '@/components/assurance/SemanticDiffViewer';
 import { ImpactGraph } from '@/components/assurance/ImpactGraph';
@@ -29,16 +35,37 @@ import {
   Clock,
   ArrowLeft,
   Sliders,
+  Ban,
+  RotateCcw,
 } from 'lucide-react';
+
+const STAGE_ORDER = [
+  'VALIDATION',
+  'SEMANTIC_ANALYSIS',
+  'IMPACT_ANALYSIS',
+  'RISK_DIRECTED_TESTING',
+  'RECONCILIATION',
+  'PORTFOLIO_ANALYSIS',
+  'REMEDIATION',
+  'DECISION',
+] as const;
+
+type StageDisplayState = 'NOT_STARTED' | 'RUNNING' | 'DONE' | 'CANCELLED';
 
 export default function MissionDetailPage() {
   const params = useParams();
   const missionId = params.missionId as string;
 
-  const [missionData, setMissionData] = useState<any | null>(null);
+  const [missionData, setMissionData] = useState<AssuranceMissionDetail | null>(null);
+  const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [consecutiveErrors, setConsecutiveErrors] = useState(0);
+
+  const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const [activeTab, setActiveTab] = useState<
     'summary' | 'semantic' | 'impact' | 'experiments' | 'recon' | 'blast' | 'remediation' | 'evidence' | 'agent'
@@ -56,6 +83,14 @@ export default function MissionDetailPage() {
           const data = await getAssuranceMission(missionId);
           setMissionData(data);
           setConsecutiveErrors(0);
+          // Real per-stage event history drives stage display below. A failure
+          // fetching events must not blank the page — mission data already loaded.
+          try {
+            const eventsRes = await getAssuranceRunEvents(missionId);
+            setEvents(eventsRes.events || []);
+          } catch {
+            // Non-fatal: stage display falls back to "not started" for all stages.
+          }
           return;
         } catch (err) {
           lastErr = err;
@@ -143,11 +178,14 @@ export default function MissionDetailPage() {
     );
   }
 
-  const result: AssuranceResultV2 = missionData?.result || {};
-  const meta = missionData?.metadata || {};
-  const statusStr = (missionData?.status || 'QUEUED').toUpperCase();
+  const result = (missionData?.result || {}) as unknown as AssuranceResultV2;
+  const meta = (missionData?.metadata || {}) as Record<string, any>;
+  const statusStr = (missionData?.status || 'QUEUED').toString().toUpperCase();
   const isRunning = ['QUEUED', 'RUNNING', 'VALIDATING', 'WAITING_RETRY'].includes(statusStr);
+  const isCancelled = statusStr === 'CANCELLED';
   const decision = result?.release_decision?.data?.status || missionData?.decision || 'UNKNOWN';
+  const eligibleActions = missionData?.eligible_actions || { cancel: false, retry: false, archive: false, delete: false };
+  const currentStage = missionData?.current_stage || null;
 
   // Section Safeties
   const validationSec = result?.validation || { status: 'NOT_RUN' };
@@ -160,9 +198,57 @@ export default function MissionDetailPage() {
   const revalidationSec = result?.revalidation || { status: 'NOT_RUN' };
   const agentSec = result?.agent_execution || { status: 'NOT_RUN' };
 
-  // Heartbeat threshold check (> 120s)
+  // Heartbeat threshold check (> 120s) — reported honestly as "no heartbeat", not
+  // as a guess about what the worker might currently be doing.
   const lastUpdated = missionData?.updated_at ? new Date(missionData.updated_at).getTime() : Date.now();
   const isStale = isRunning && Date.now() - lastUpdated > 120000;
+
+  // Real per-stage state: "not started" until an actual stage-start event exists,
+  // "running" only for the single stage the backend reports as current_stage, and
+  // never "running" once the mission itself is CANCELLED.
+  const stageState = (stageName: (typeof STAGE_ORDER)[number]): StageDisplayState => {
+    if (isCancelled) return 'CANCELLED';
+    const hasEvent = events.some((e) => e.stage === stageName);
+    if (!hasEvent) return 'NOT_STARTED';
+    if (currentStage === stageName && isRunning) return 'RUNNING';
+    return 'DONE';
+  };
+
+  const stageStatusLine = (stageName: (typeof STAGE_ORDER)[number], sec: { status?: string; reason?: string | null }) => {
+    if (sec?.status === 'SUCCEEDED') return null; // real component renders instead
+    const state = stageState(stageName);
+    if (state === 'CANCELLED') return 'Cancelled — mission execution was stopped before this stage completed.';
+    if (state === 'RUNNING') return 'Running.';
+    if (state === 'NOT_STARTED') return 'Not started.';
+    return sec?.reason || (sec?.status === 'FAILED' ? 'Failed.' : 'Completed without producing this section.');
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    setActionError(null);
+    try {
+      await cancelAssuranceMission(missionId);
+      setShowCancelConfirm(false);
+      await loadData();
+    } catch (err: unknown) {
+      setActionError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    setActionError(null);
+    try {
+      await retryAssuranceMission(missionId);
+      await loadData();
+    } catch (err: unknown) {
+      setActionError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <MissionErrorBoundary onRetry={loadData}>
@@ -187,6 +273,23 @@ export default function MissionDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {eligibleActions.retry && (
+              <button
+                onClick={handleRetry}
+                disabled={retrying}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} /> Retry
+              </button>
+            )}
+            {eligibleActions.cancel && (
+              <button
+                onClick={() => setShowCancelConfirm(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800 bg-amber-950 px-3.5 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-900"
+              >
+                <Ban className="h-3.5 w-3.5" /> Cancel
+              </button>
+            )}
             <button
               onClick={loadData}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-850"
@@ -196,12 +299,44 @@ export default function MissionDetailPage() {
           </div>
         </div>
 
-        {/* Stale Mission Heartbeat Warning Banner */}
+        {actionError && (
+          <div className="rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-300 font-mono">
+            [Action Failed] {actionError}
+          </div>
+        )}
+
+        {/* Cancel Confirmation */}
+        {showCancelConfirm && (
+          <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-4 space-y-3">
+            <p className="text-xs text-amber-200">
+              {statusStr === 'RUNNING'
+                ? 'This mission is actively running — cancellation will be requested and honored cooperatively between stages, not instantly.'
+                : 'Cancel this mission? It will transition directly to CANCELLED.'}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                {cancelling ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Stale Mission Heartbeat Warning Banner — reports the fact, not a guess */}
         {isStale && (
           <div className="rounded-xl border border-amber-800 bg-amber-950/40 p-4 text-xs text-amber-200 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Clock className="h-4 w-4 text-amber-400 flex-shrink-0" />
-              <span>Warning: Execution is taking longer than expected (&gt; 120s). Background worker may be calculating 50K portfolio blast radius.</span>
+              <span>No heartbeat received from the worker for over 120 seconds. Current stage: {currentStage || 'unknown'}.</span>
             </div>
             <button
               onClick={loadData}
@@ -212,19 +347,47 @@ export default function MissionDetailPage() {
           </div>
         )}
 
-        {/* Running Banner */}
-        {isRunning && (
-          <div className="rounded-xl border border-sky-800/80 bg-sky-950/30 p-5 space-y-2">
+        {/* Status Banner: one honest message per lifecycle state, no fabricated progress text */}
+        {statusStr === 'QUEUED' && (
+          <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5 flex items-center gap-2 text-sm text-slate-300">
+            <Clock className="h-4 w-4 text-slate-400" />
+            Waiting for an assurance worker.
+          </div>
+        )}
+        {statusStr === 'VALIDATING' && (
+          <div className="rounded-xl border border-sky-800/80 bg-sky-950/30 p-5 flex items-center gap-2 text-sm text-sky-300">
+            <RefreshCw className="h-4 w-4 animate-spin text-sky-400" />
+            Validating mission sources and connector configuration.
+          </div>
+        )}
+        {statusStr === 'RUNNING' && (
+          <div className="rounded-xl border border-sky-800/80 bg-sky-950/30 p-5 space-y-1">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sky-300 font-bold text-sm">
                 <RefreshCw className="h-4 w-4 animate-spin text-sky-400" />
-                Assurance Supervisor Executing Mission Stages...
+                Running{currentStage ? `: ${currentStage.replaceAll('_', ' ').toLowerCase()}` : ''}
               </div>
-              <span className="font-mono text-xs text-sky-400">{missionData?.workflow_stage || 'PROCESSING'}</span>
+              {missionData?.cancellation_requested && (
+                <span className="font-mono text-xs text-amber-400">Cancellation requested — stopping at next checkpoint</span>
+              )}
             </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Google ADK + Gemini 3.7 Flash supervisor is actively coordinating AST diff comparison, DAG impact analysis, boundary probes, and 50K portfolio blast radius calculations in the background.
-            </p>
+          </div>
+        )}
+        {statusStr === 'WAITING_RETRY' && (
+          <div className="rounded-xl border border-amber-800/80 bg-amber-950/30 p-5 space-y-1 text-sm text-amber-200">
+            <div className="font-bold">Waiting to retry (attempt {missionData?.attempt_number ?? 1}).</div>
+            {missionData?.status_reason && <p className="text-xs text-amber-300/90">{missionData.status_reason}</p>}
+          </div>
+        )}
+        {statusStr === 'FAILED' && (
+          <div className="rounded-xl border border-rose-800/80 bg-rose-950/30 p-5 space-y-1 text-sm text-rose-200">
+            <div className="font-bold">Failed{currentStage ? ` at stage: ${currentStage.replaceAll('_', ' ').toLowerCase()}` : ''}.</div>
+            {missionData?.status_reason && <p className="text-xs text-rose-300/90 font-mono">{missionData.status_reason}</p>}
+          </div>
+        )}
+        {isCancelled && (
+          <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5 text-sm text-slate-300">
+            Cancelled. {missionData?.status_reason || 'Execution was stopped before completion.'}
           </div>
         )}
 
@@ -269,16 +432,25 @@ export default function MissionDetailPage() {
           </div>
         )}
 
-        {/* AI Runtime Header */}
+        {/* AI Runtime Header — model_status is reported as-is from the backend, never
+            hardcoded, so this never claims a live Gemini invocation that didn't happen. */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-sky-400" />
             <span className="font-bold text-white">AI Runtime:</span>
-            <span className="font-mono text-sky-300 font-bold">Gemini 3.7 Flash</span>
+            <span className="font-mono text-sky-300 font-bold">{result?.ai_runtime?.model_id || 'Not configured'}</span>
             <span className="text-slate-500">|</span>
-            <span className="text-slate-300">Framework: Google ADK</span>
+            <span className="text-slate-300">Framework: {result?.ai_runtime?.framework || 'n/a'}</span>
             <span className="text-slate-500">|</span>
-            <span className="text-emerald-400 font-bold">Model Status: Ready</span>
+            <span
+              className={
+                result?.ai_runtime?.model_status && !result.ai_runtime.model_status.startsWith('NOT_')
+                  ? 'text-emerald-400 font-bold'
+                  : 'text-slate-400 font-bold'
+              }
+            >
+              Model Status: {result?.ai_runtime?.model_status || 'Unknown'}
+            </span>
           </div>
           <span className="font-mono text-[11px] text-slate-400">Strict Deterministic Boundary Enforced</span>
         </div>
@@ -345,11 +517,17 @@ export default function MissionDetailPage() {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
                   <div className="rounded-lg border border-sky-800/80 bg-slate-950 p-3 space-y-1">
                     <div className="text-sky-400 font-bold font-sans">Source A (Pricing Intent):</div>
-                    <div className="text-slate-200">{meta.source_a || 'AZ_HO3_2026_09'}</div>
+                    <div className="text-slate-200">{meta.source_a || 'Not set'}</div>
                   </div>
                   <div className="rounded-lg border border-purple-800/80 bg-slate-950 p-3 space-y-1">
                     <div className="text-purple-400 font-bold font-sans">Source B / Target Runtime:</div>
-                    <div className="text-slate-200">{meta.source_b || 'AZ_HO3_2026_09_DEFECTIVE'}</div>
+                    <div className="text-slate-200">
+                      {meta.source_b
+                        ? meta.source_b
+                        : meta.mission_object?.runtime_connector?.connector_name
+                        ? `Runtime connector: ${meta.mission_object.runtime_connector.connector_name}`
+                        : 'None (no target selected)'}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -362,7 +540,7 @@ export default function MissionDetailPage() {
               <SemanticDiffViewer diffs={semanticSec.data?.differences} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {semanticSec?.status || 'NOT_RUN'} — {semanticSec?.reason || (isRunning ? 'Executing semantic diff analysis...' : 'Omitted or not available.')}
+                Status: {semanticSec?.status || 'NOT_RUN'} — {stageStatusLine('SEMANTIC_ANALYSIS', semanticSec)}
               </div>
             )
           )}
@@ -373,7 +551,7 @@ export default function MissionDetailPage() {
               <ImpactGraph impact={impactSec.data} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {impactSec?.status || 'NOT_RUN'} — {impactSec?.reason || (isRunning ? 'Executing DAG graph traversal...' : 'Omitted or not available.')}
+                Status: {impactSec?.status || 'NOT_RUN'} — {stageStatusLine('IMPACT_ANALYSIS', impactSec)}
               </div>
             )
           )}
@@ -384,7 +562,7 @@ export default function MissionDetailPage() {
               <TestPlanViewer testPlan={experimentsSec.data} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {experimentsSec?.status || 'NOT_RUN'} — {experimentsSec?.reason || (isRunning ? 'Executing risk-directed probes...' : 'Omitted or not available.')}
+                Status: {experimentsSec?.status || 'NOT_RUN'} — {stageStatusLine('RISK_DIRECTED_TESTING', experimentsSec)}
               </div>
             )
           )}
@@ -395,7 +573,7 @@ export default function MissionDetailPage() {
               <ReconciliationTrace scenario={experimentsSec?.data?.experiments?.[0] as any} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {reconSec?.status || 'NOT_RUN'} — {reconSec?.reason || (isRunning ? 'Executing trace reconciliation & RCA...' : 'Omitted or not available.')}
+                Status: {reconSec?.status || 'NOT_RUN'} — {stageStatusLine('RECONCILIATION', reconSec)}
               </div>
             )
           )}
@@ -406,7 +584,7 @@ export default function MissionDetailPage() {
               <PortfolioImpactFunnel portfolio={blastSec.data as any} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {blastSec?.status || 'NOT_RUN'} — {blastSec?.reason || (isRunning ? 'Evaluating 50K portfolio exposure...' : 'Omitted or not available.')}
+                Status: {blastSec?.status || 'NOT_RUN'} — {stageStatusLine('PORTFOLIO_ANALYSIS', blastSec)}
               </div>
             )
           )}
@@ -471,7 +649,7 @@ export default function MissionDetailPage() {
               </div>
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {remediationSec?.status || 'NOT_RUN'} — {remediationSec?.reason || (isRunning ? 'Generating remediation proposal...' : 'Omitted or not required.')}
+                Status: {remediationSec?.status || 'NOT_RUN'} — {stageStatusLine('REMEDIATION', remediationSec)}
               </div>
             )
           )}
@@ -481,13 +659,13 @@ export default function MissionDetailPage() {
             <EvidenceLineage evidence={result?.evidence_refs as any} isCompleted={true} />
           )}
 
-          {/* Tab 9: Gemini Action Timeline */}
+          {/* Tab 9: Agent Action Timeline */}
           {activeTab === 'agent' && (
             agentSec?.status === 'SUCCEEDED' ? (
               <AgentActivityPanel agentSteps={agentSec.data as any} isCompleted={true} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {agentSec?.status || 'NOT_RUN'} — {agentSec?.reason || (isRunning ? 'Logging agent execution timeline...' : 'Timeline omitted.')}
+                Status: {agentSec?.status || 'NOT_RUN'} — {stageStatusLine('DECISION', agentSec)}
               </div>
             )
           )}

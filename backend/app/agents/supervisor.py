@@ -1,5 +1,6 @@
 import time
 import uuid
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
@@ -30,14 +31,22 @@ from app.models import (
     SemanticAnalysisData,
     ToolInvocation,
 )
+from app.services.mission_transitions import apply_transition
 from app.services.remediation_service import RemediationService
 from app.services.validation_service import MissionValidationService
-from app.storage import BaseRunStore, EvidenceRecord, EvidenceType
+from app.storage import AssuranceRunStatus, BaseRunStore, EvidenceRecord, EvidenceType
+
+# NOTE: This supervisor does not currently perform live structured Gemini tool
+# calls (that is tracked as a follow-up, out of scope for this change) — every
+# AgentAction below is a deterministic-pipeline record. `ai_runtime.model_status`
+# reflects that honestly rather than claiming a model invocation that didn't happen.
+AI_RUNTIME_NOT_INVOKED_STATUS = "NOT_INVOKED_DETERMINISTIC_PIPELINE"
 
 
 class AssuranceSupervisor:
-    """Google ADK + Gemini 3.7 Flash Adaptive Assurance Supervisor.
-    Dynamically plans and executes evidence-driven assurance workflows while enforcing strict deterministic calculation boundaries.
+    """Assurance Mission V2 deterministic pipeline supervisor.
+    Executes evidence-driven assurance workflows while enforcing strict deterministic calculation boundaries.
+    Real Gemini-backed structured tool selection is not yet wired into this class (see AI_RUNTIME_NOT_INVOKED_STATUS).
     """
 
     def __init__(self, store: BaseRunStore):
@@ -49,11 +58,59 @@ class AssuranceSupervisor:
         self.portfolio_analyzer = PortfolioExposureAnalyzer()
         self.remediation_service = RemediationService()
 
+    def _mark_stage(self, mission_id: str, stage_name: str) -> None:
+        """Persists a real stage-start event and updates current_stage BEFORE that
+        stage's work begins, so the UI never has to infer "running" purely from
+        overall mission status."""
+        record = self.store.get_run(mission_id)
+        if record is not None:
+            record.current_stage = stage_name
+            self.store.update_run(record)
+        self.store.log_event(
+            run_id=mission_id,
+            stage=stage_name,
+            message=f"Stage started: {stage_name}",
+        )
+
+    def _is_cancelled(
+        self, mission_id: str, cancellation_check: "Callable[[], bool] | None"
+    ) -> bool:
+        if cancellation_check is None:
+            return False
+        try:
+            return bool(cancellation_check())
+        except Exception:
+            return False
+
+    def _finalize_cancelled(
+        self, mission: AssuranceMission, result: AssuranceResultV2, agent_actions: list[AgentAction]
+    ) -> AssuranceResultV2:
+        result.overall_status = "CANCELLED"
+        mission.status = MissionStatus.CANCELLED
+        transition = apply_transition(
+            self.store,
+            mission.mission_id,
+            AssuranceRunStatus.CANCELLED,
+            status_reason="Cooperative cancellation honored between stages.",
+            workflow_stage="CANCELLED",
+        )
+        if transition.ok and transition.record is not None:
+            transition.record.agent_activity = [act.dict() for act in agent_actions]
+            transition.record.report = result.dict()
+            self.store.update_run(transition.record)
+        self.store.log_event(
+            run_id=mission.mission_id,
+            stage="CANCELLED",
+            message="Mission execution stopped: cancellation was requested and honored between stages.",
+        )
+        return result
+
     def run_mission(
         self,
         mission: AssuranceMission,
         left_pkg: IPIRPackage,
         right_pkg: IPIRPackage | None = None,
+        cancellation_check: "Callable[[], bool] | None" = None,
     ) -> AssuranceResultV2:
         agent_actions: list[AgentAction] = []
         tool_invocations: list[ToolInvocation] = []
@@ -66,13 +123,14 @@ class AssuranceSupervisor:
             ai_runtime={
                 "model_id": "gemini-3.7-flash",
                 "framework": "Google ADK",
-                "model_status": "Ready",
+                "model_status": AI_RUNTIME_NOT_INVOKED_STATUS,
             },
         )
 
         # Update Mission Status
         mission.status = MissionStatus.RUNNING
         self.store.save_run(self.store.get_run(mission.mission_id) or self._create_record_from_mission(mission))
+        self._mark_stage(mission.mission_id, "VALIDATION")
 
         # -------------------------------------------------------------
         # STAGE 1: Source & Connector Validation
@@ -109,9 +167,13 @@ class AssuranceSupervisor:
             data=[],
         )
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # -------------------------------------------------------------
         # STAGE 2: Semantic Analysis (EQUIVALENCE & RELEASE_CONFORMANCE)
         # -------------------------------------------------------------
+        self._mark_stage(mission.mission_id, "SEMANTIC_ANALYSIS")
         sem_diffs: list[MaterialFinding] = []
         is_clean_equivalence = False
 
@@ -129,7 +191,6 @@ class AssuranceSupervisor:
                 )
             )
 
-            sem_summary = f"{len(sem_diffs)} AST semantic differences identified."
             sem_diffs = [
                 MaterialFinding(
                     finding_id=f"FND-{uuid.uuid4().hex[:6].upper()}",
@@ -143,6 +204,9 @@ class AssuranceSupervisor:
                 )
                 for diff in raw_diff_result.differences
             ]
+            # Computed AFTER sem_diffs is populated so the persisted count is correct
+            # (previously this was computed against the empty list before assignment).
+            sem_summary = f"{len(sem_diffs)} AST semantic differences identified."
 
             result.semantic_analysis = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
@@ -268,8 +332,11 @@ class AssuranceSupervisor:
         # -------------------------------------------------------------
         # BRANCH B: MATERIAL DRIFT OR RUNTIME VERIFICATION
         # -------------------------------------------------------------
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
 
         # STAGE 3: Impact Analysis (DAG Traversal)
+        self._mark_stage(mission.mission_id, "IMPACT_ANALYSIS")
         if sem_diffs and right_pkg:
             imp_start = time.time()
             raw_impact = self.impact_engine.analyze(raw_diff_result, left_pkg)
@@ -302,7 +369,11 @@ class AssuranceSupervisor:
                 reason="Dependency impact graph traversal skipped for Black-Box Runtime Verification.",
             )
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # STAGE 4: Risk-Directed Boundary Testing / Black-Box Probes
+        self._mark_stage(mission.mission_id, "RISK_DIRECTED_TESTING")
         exp_start = time.time()
         if raw_diff_result and raw_impact:
             test_plan = self.test_generator.generate_plan(left_pkg, raw_diff_result, raw_impact)
@@ -374,7 +445,11 @@ class AssuranceSupervisor:
         )
         agent_actions.append(action_exp)
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # STAGE 5: Trace Reconciliation & Root Cause Analysis
+        self._mark_stage(mission.mission_id, "RECONCILIATION")
         if right_pkg and mismatch_count > 0:
             recon_res = self.reconciliation_engine.reconcile_packages(left_pkg, right_pkg)
             first_div = recon_res.first_divergent_node
@@ -420,7 +495,11 @@ class AssuranceSupervisor:
                 reason="Zero price divergences reproduced during experiment probing.",
             )
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # STAGE 6: Portfolio Blast Radius & Measured Telemetry
+        self._mark_stage(mission.mission_id, "PORTFOLIO_ANALYSIS")
         port_start = time.time()
         if right_pkg:
             raw_port = self.portfolio_analyzer.evaluate_portfolio(
@@ -468,7 +547,11 @@ class AssuranceSupervisor:
                 reason="Portfolio blast radius evaluation requires a full IPIR target package or accessible portfolio batch execution.",
             )
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # STAGE 7: Remediation Proposal & Revalidation
+        self._mark_stage(mission.mission_id, "REMEDIATION")
         if right_pkg and result.semantic_analysis.data and result.semantic_analysis.data.differences:
             rem_prop = self.remediation_service.generate_remediation_proposal(
                 left_pkg, right_pkg, result.semantic_analysis.data.differences
@@ -496,7 +579,11 @@ class AssuranceSupervisor:
                 reason="Revalidation omitted.",
             )
 
+        if self._is_cancelled(mission.mission_id, cancellation_check):
+            return self._finalize_cancelled(mission, result, agent_actions)
+
         # STAGE 8: Final Release Decision
+        self._mark_stage(mission.mission_id, "DECISION")
         blocking_reasons: list[str] = []
         if mismatch_count > 0:
             blocking_reasons.append(f"{mismatch_count} price calculation mismatches reproduced.")
@@ -549,22 +636,32 @@ class AssuranceSupervisor:
     def _update_mission_record(
         self, mission: AssuranceMission, result: AssuranceResultV2, agent_actions: list[AgentAction]
     ) -> None:
+        """Persists the final mission outcome via apply_transition so a mission that
+        was CANCELLED (by a request that raced in during execution) can never be
+        overwritten with a later COMPLETED/FAILED/NEEDS_REVIEW result from this
+        worker. If the transition is refused (target not legal from the mission's
+        current stored status), the existing terminal record is left untouched."""
         from app.storage.models import AssuranceRunStatus
-        rec = self.store.get_run(mission.mission_id) or self._create_record_from_mission(mission)
 
         if mission.status == MissionStatus.COMPLETED:
-            rec.status = AssuranceRunStatus.COMPLETED
-            rec.workflow_stage = "FINISHED"
+            target_status, workflow_stage = AssuranceRunStatus.COMPLETED, "FINISHED"
         elif mission.status == MissionStatus.NEEDS_REVIEW:
-            rec.status = AssuranceRunStatus.NEEDS_REVIEW
-            rec.workflow_stage = "NEEDS_REVIEW"
+            target_status, workflow_stage = AssuranceRunStatus.NEEDS_REVIEW, "NEEDS_REVIEW"
         elif mission.status == MissionStatus.FAILED:
-            rec.status = AssuranceRunStatus.FAILED
-            rec.workflow_stage = "FAILED"
+            target_status, workflow_stage = AssuranceRunStatus.FAILED, "FAILED"
         else:
-            rec.status = AssuranceRunStatus(mission.status.value)
-            rec.workflow_stage = mission.status.value
+            target_status, workflow_stage = AssuranceRunStatus(mission.status.value), mission.status.value
 
+        existing = self.store.get_run(mission.mission_id)
+        if existing is None:
+            self.store.create_run(self._create_record_from_mission(mission))
+
+        transition = apply_transition(self.store, mission.mission_id, target_status, workflow_stage=workflow_stage)
+        if not transition.ok or transition.record is None:
+            # Refused (e.g. mission already CANCELLED/ARCHIVED) — do not clobber it.
+            return
+
+        rec = transition.record
         rec.decision = result.release_decision.data.status if result.release_decision.data else "UNKNOWN"
         rec.summary = result.release_decision.data.summary if result.release_decision.data else "Mission executed."
         rec.report = result.dict()

@@ -15,7 +15,11 @@ import {
   Play,
   Layers,
   ArrowRight,
+  Sparkles,
 } from 'lucide-react';
+
+const DEMO_LEFT_PACKAGE_ID = 'AZ_HO3_2026_09';
+const DEMO_RIGHT_PACKAGE_ID = 'AZ_HO3_2026_09_DEFECTIVE';
 
 export default function SourcesPage() {
   const router = useRouter();
@@ -32,6 +36,13 @@ export default function SourcesPage() {
   const [uploadingB, setUploadingB] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Explicit opt-in only — real uploaded sources are never silently replaced with
+  // the bundled Arizona demo packages.
+  const [useDemoSample, setUseDemoSample] = useState(false);
+
+  const hasRealSources = !!(compiledA?.ipir_package_id && compiledB?.ipir_package_id);
+  const canExecute = hasRealSources || useDemoSample;
 
   const supportedAdapters = [
     {
@@ -95,14 +106,18 @@ export default function SourcesPage() {
   };
 
   const handleLaunchFromSources = async () => {
+    if (!canExecute) {
+      setError('Upload and compile both Source A and Source B before executing, or explicitly enable the demo sample.');
+      return;
+    }
     setRunning(true);
     setError(null);
     try {
       const res = await startAssuranceRun({
-        leftSourceId: sourceA?.source_id,
-        rightSourceId: sourceB?.source_id,
-        leftPackageId: compiledA?.ipir_package_id || 'AZ_HO3_2026_09',
-        rightPackageId: compiledB?.ipir_package_id || 'AZ_HO3_2026_09_DEFECTIVE',
+        leftSourceId: hasRealSources ? sourceA?.source_id : undefined,
+        rightSourceId: hasRealSources ? sourceB?.source_id : undefined,
+        leftPackageId: hasRealSources ? compiledA.ipir_package_id : DEMO_LEFT_PACKAGE_ID,
+        rightPackageId: hasRealSources ? compiledB.ipir_package_id : DEMO_RIGHT_PACKAGE_ID,
         asyncExecution: true,
       });
       if (res.run_id) {
@@ -232,24 +247,52 @@ export default function SourcesPage() {
       </div>
 
       {/* Launch Assurance from Sources Banner */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
-        <div>
-          <h3 className="text-base font-bold text-white flex items-center gap-2">
-            <Play className="h-4 w-4 text-sky-400" /> Run Assurance on Ingested Sources
-          </h3>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Launch multi-agent assurance workflow directly comparing compiled Source A against Source B.
-          </p>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Play className="h-4 w-4 text-sky-400" /> Run Assurance on Ingested Sources
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Launch multi-agent assurance workflow directly comparing compiled Source A against Source B.
+            </p>
+          </div>
+
+          <button
+            onClick={handleLaunchFromSources}
+            disabled={running || !canExecute}
+            title={!canExecute ? 'Upload and compile both sources, or enable the demo sample below.' : undefined}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-purple-600 px-6 py-3 text-xs font-bold text-white hover:opacity-90 transition-all shadow-lg disabled:opacity-50 shrink-0"
+          >
+            {running ? 'Launching Workflow...' : 'Execute Assurance (A ↔ B)'}
+            <ArrowRight className="h-4 w-4" />
+          </button>
         </div>
 
-        <button
-          onClick={handleLaunchFromSources}
-          disabled={running}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-purple-600 px-6 py-3 text-xs font-bold text-white hover:opacity-90 transition-all shadow-lg disabled:opacity-50 shrink-0"
-        >
-          {running ? 'Launching Workflow...' : 'Execute Assurance (A ↔ B)'}
-          <ArrowRight className="h-4 w-4" />
-        </button>
+        {!hasRealSources && (
+          <label className="flex items-start gap-2.5 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs text-amber-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useDemoSample}
+              onChange={(e) => setUseDemoSample(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-bold flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" /> Use demo sample
+              </span>
+              <span className="block text-amber-200/80 mt-0.5">
+                No files uploaded and compiled yet. Check this to explicitly run against the bundled Arizona HO3
+                canonical vs. defective demo packages instead — this is never selected automatically.
+              </span>
+            </span>
+          </label>
+        )}
+        {!hasRealSources && useDemoSample && (
+          <div className="rounded-lg border border-sky-800/60 bg-sky-950/20 px-3 py-2 text-[11px] font-mono text-sky-300">
+            Demo sample selected: {DEMO_LEFT_PACKAGE_ID} ↔ {DEMO_RIGHT_PACKAGE_ID}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -2,7 +2,14 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { listAssuranceMissions, archiveAssuranceMission, deleteAssuranceMission, ApiError } from '@/lib/api/client';
+import {
+  listAssuranceMissions,
+  archiveAssuranceMission,
+  deleteAssuranceMission,
+  cancelAssuranceMission,
+  retryAssuranceMission,
+  ApiError,
+} from '@/lib/api/client';
 import { AssuranceMissionSummary, ComparisonMode } from '@/lib/types/assurance';
 import {
   ListFilter,
@@ -19,6 +26,9 @@ import {
   Layers,
   ShieldCheck,
   X,
+  Ban,
+  RotateCcw,
+  Sparkles,
 } from 'lucide-react';
 
 export default function MissionsHistoryPage() {
@@ -37,6 +47,14 @@ export default function MissionsHistoryPage() {
   const [deleteModalMission, setDeleteModalMission] = useState<AssuranceMissionSummary | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Cancel Safeguard Modal State
+  const [cancelModalMission, setCancelModalMission] = useState<AssuranceMissionSummary | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Per-row action errors (archive/retry) that must not hide the mission row.
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   const fetchMissions = useCallback(async () => {
     setLoading(true);
@@ -60,11 +78,43 @@ export default function MissionsHistoryPage() {
   }, [fetchMissions]);
 
   const handleArchive = async (missionId: string) => {
+    setActionErrors((prev) => ({ ...prev, [missionId]: '' }));
     try {
       await archiveAssuranceMission(missionId);
       fetchMissions();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setActionErrors((prev) => ({ ...prev, [missionId]: msg }));
+    }
+  };
+
+  const handleRetry = async (missionId: string) => {
+    setActionErrors((prev) => ({ ...prev, [missionId]: '' }));
+    try {
+      await retryAssuranceMission(missionId);
+      fetchMissions();
+    } catch (err: unknown) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setActionErrors((prev) => ({ ...prev, [missionId]: msg }));
+    }
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelModalMission) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await cancelAssuranceMission(cancelModalMission.mission_id);
+      setCancelModalMission(null);
+      fetchMissions();
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setCancelError(err.message);
+      } else {
+        setCancelError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -194,22 +244,44 @@ export default function MissionsHistoryPage() {
                 </td>
               </tr>
             ) : (
-              missions.map((m) => (
+              missions.map((m) => {
+                const actions = m.eligible_actions || { cancel: false, retry: false, archive: false, delete: false };
+                const isDemo = m.is_demo_sample ?? m.disposable_sample_run;
+                const rowError = actionErrors[m.mission_id];
+                return (
                 <tr key={m.mission_id} className="transition-colors hover:bg-slate-800/40">
                   <td className="px-4 py-3 font-bold text-sky-400">{m.mission_id}</td>
                   <td className="px-4 py-3 font-sans">
-                    <div className="font-bold text-white">{m.name}</div>
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      {m.name}
+                      {isDemo && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded bg-amber-950 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 border border-amber-800"
+                          title="Uses a bundled RateGuard demo/sample source or endpoint"
+                        >
+                          <Sparkles className="h-2.5 w-2.5" /> Demo sample
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
                       <span className="rounded bg-sky-950 px-1.5 py-0.5 text-[10px] text-sky-300 font-mono border border-sky-800">
                         {m.mode}
                       </span>
-                      <span>AZ_HO3 (Arizona)</span>
+                      <span>{m.source_a || 'no source A'} {m.source_b ? `↔ ${m.source_b}` : m.runtime_connector_name ? `↔ ${m.runtime_connector_name}` : ''}</span>
                     </div>
+                    {rowError && (
+                      <div className="mt-1 rounded border border-rose-800 bg-rose-950/50 px-2 py-1 text-[10px] text-rose-300 font-mono">
+                        {rowError}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className="rounded px-2 py-0.5 text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
                       {m.status}
                     </span>
+                    {m.status_reason && (
+                      <div className="text-[10px] text-slate-500 mt-1 max-w-[16rem]">{m.status_reason}</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 font-sans">
                     <span
@@ -233,29 +305,115 @@ export default function MissionsHistoryPage() {
                         <Eye className="h-3.5 w-3.5" /> View
                       </Link>
 
-                      <button
-                        onClick={() => handleArchive(m.mission_id)}
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors"
-                        title="Archive audit record"
-                      >
-                        <Archive className="h-3.5 w-3.5" />
-                      </button>
+                      {actions.cancel && (
+                        <button
+                          onClick={() => setCancelModalMission(m)}
+                          className="inline-flex items-center gap-1 rounded bg-amber-950 px-2.5 py-1 text-xs font-medium text-amber-300 border border-amber-800 hover:bg-amber-900 transition-colors"
+                          title="Cancel mission"
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => setDeleteModalMission(m)}
-                        className="inline-flex items-center gap-1 rounded bg-rose-950 px-2.5 py-1 text-xs font-medium text-rose-300 border border-rose-800 hover:bg-rose-900 transition-colors"
-                        title="Delete disposable run"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {actions.retry && (
+                        <button
+                          onClick={() => handleRetry(m.mission_id)}
+                          className="inline-flex items-center gap-1 rounded bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors"
+                          title="Retry failed mission"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {actions.archive && (
+                        <button
+                          onClick={() => handleArchive(m.mission_id)}
+                          className="inline-flex items-center gap-1 rounded bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors"
+                          title="Archive audit record"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {actions.delete && (
+                        <button
+                          onClick={() => setDeleteModalMission(m)}
+                          className="inline-flex items-center gap-1 rounded bg-rose-950 px-2.5 py-1 text-xs font-medium text-rose-300 border border-rose-800 hover:bg-rose-900 transition-colors"
+                          title="Delete disposable run"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
-              ))
+              );
+              })
             )}
           </tbody>
         </table>
       </div>
+
+      {/* Cancel Confirmation Modal */}
+      {cancelModalMission && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-amber-800 bg-slate-900 p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-amber-400 font-bold text-base">
+                <Ban className="h-5 w-5" /> Cancel Mission
+              </div>
+              <button
+                onClick={() => {
+                  setCancelModalMission(null);
+                  setCancelError(null);
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-300">
+              <p>
+                You requested cancellation of mission <strong className="text-white font-mono">{cancelModalMission.mission_id}</strong>.
+              </p>
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-[11px] font-mono text-slate-400 space-y-1">
+                <div>Current status: <span className="text-white">{cancelModalMission.status}</span></div>
+              </div>
+              <p className="text-amber-300 leading-relaxed font-sans">
+                {cancelModalMission.status === 'RUNNING'
+                  ? 'This mission is actively running — cancellation will be requested and honored cooperatively at the next stage checkpoint, not instantly.'
+                  : 'This mission will transition directly to CANCELLED and stop being processed.'}
+              </p>
+            </div>
+
+            {cancelError && (
+              <div className="rounded-lg border border-rose-800 bg-rose-950 p-3 text-xs text-rose-300 font-mono">
+                [Cancel Failed] {cancelError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setCancelModalMission(null);
+                  setCancelError(null);
+                }}
+                className="rounded-lg border border-slate-800 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={confirmCancel}
+                disabled={cancelling}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-500 transition-all disabled:opacity-50"
+              >
+                {cancelling ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Safeguard Modal */}
       {deleteModalMission && (

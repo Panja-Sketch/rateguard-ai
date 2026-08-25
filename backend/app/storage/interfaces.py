@@ -1,7 +1,21 @@
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from app.storage.models import AssuranceRunRecord, AssuranceRunStatus, EvidenceRecord, RunEvent
+
+LEASE_TTL_SECONDS = 120
+
+
+class LeaseOutcome(StrEnum):
+    """Result of attempting to acquire an execution lease for a run."""
+
+    ACQUIRED = "ACQUIRED"
+    NOT_FOUND = "NOT_FOUND"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+    ALREADY_LEASED = "ALREADY_LEASED"
+    INVALID_TRANSITION = "INVALID_TRANSITION"
 
 
 class BaseRunStore(ABC):
@@ -10,6 +24,15 @@ class BaseRunStore(ABC):
     @abstractmethod
     def create_run(self, record: AssuranceRunRecord) -> AssuranceRunRecord:
         """Creates a new assurance run record."""
+        pass
+
+    @abstractmethod
+    def delete_run(self, run_id: str) -> bool:
+        """Permanently deletes a run record and returns True only if a document
+        was actually confirmed deleted from the backing store. Callers MUST
+        enforce deletion eligibility (see mission_transitions.is_deletable)
+        BEFORE calling this — this method performs the deletion, not the policy
+        check, and never hard-deletes historical RUN-* records implicitly."""
         pass
 
     def save_run(self, record: AssuranceRunRecord) -> AssuranceRunRecord:
@@ -102,3 +125,46 @@ class BaseRunStore(ABC):
     def get_evidence(self, run_id: str) -> list[EvidenceRecord]:
         """Retrieves all evidence lineage records for a run."""
         pass
+
+    def acquire_lease(
+        self, run_id: str, job_id: str, lease_seconds: int = LEASE_TTL_SECONDS
+    ) -> tuple[LeaseOutcome, AssuranceRunRecord | None]:
+        """Attempts to acquire an execution lease for `run_id`, transitioning it to
+        RUNNING and stamping lease ownership/heartbeat metadata.
+
+        Base implementation is a best-effort (non-atomic) read-modify-write and is
+        only safe against duplicate delivery on a single-process store guarded
+        elsewhere by a lock. Store adapters backed by a real database MUST override
+        this with a transactionally atomic implementation.
+        """
+        from app.services.mission_transitions import TERMINAL_STATUSES, apply_transition
+
+        record = self.get_run(run_id)
+        if record is None:
+            return LeaseOutcome.NOT_FOUND, None
+
+        status_str = record.status.value if hasattr(record.status, "value") else str(record.status)
+        if status_str in TERMINAL_STATUSES:
+            return LeaseOutcome.ALREADY_TERMINAL, record
+
+        meta = record.metadata if isinstance(record.metadata, dict) else {}
+        last_hb = meta.get("last_heartbeat_at")
+        if status_str == "RUNNING" and last_hb:
+            try:
+                hb_dt = datetime.fromisoformat(last_hb) if isinstance(last_hb, str) else last_hb
+                if (datetime.now(UTC) - hb_dt).total_seconds() < lease_seconds:
+                    return LeaseOutcome.ALREADY_LEASED, record
+            except Exception:
+                pass
+
+        now_iso = datetime.now(UTC).isoformat()
+        result = apply_transition(
+            self,
+            run_id,
+            AssuranceRunStatus.RUNNING,
+            workflow_stage="RUNNING",
+            extra_metadata={"last_heartbeat_at": now_iso, "lease_owner": job_id},
+        )
+        if not result.ok:
+            return LeaseOutcome.INVALID_TRANSITION, result.record
+        return LeaseOutcome.ACQUIRED, result.record

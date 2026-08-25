@@ -1,14 +1,14 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel
 
-from app.storage.interfaces import BaseRunStore
+from app.storage.interfaces import LEASE_TTL_SECONDS, BaseRunStore, LeaseOutcome
 from app.storage.memory_store import InMemoryRunStore
-from app.storage.models import AssuranceRunRecord, EvidenceRecord, RunEvent
+from app.storage.models import AssuranceRunRecord, AssuranceRunStatus, EvidenceRecord, RunEvent
 
 logger = logging.getLogger(__name__)
 
@@ -200,3 +200,96 @@ class FirestoreRunStore(BaseRunStore):
                 if not self.fallback_on_error:
                     raise
         return self._fallback_store.get_evidence(run_id)
+
+    def delete_run(self, run_id: str) -> bool:
+        """Permanently deletes the Firestore document (and its events/evidence
+        subcollections, which Firestore does not cascade-delete automatically)
+        for a run, returning True only after Firestore confirms the document no
+        longer exists. Never reports success without that confirmation."""
+        if self._db is None:
+            return self._fallback_store.delete_run(run_id)
+        try:
+            doc_ref = self._db.collection("assurance_runs").document(run_id)
+            snapshot = doc_ref.get()
+            if not snapshot.exists:
+                return False
+            # Firestore does not cascade-delete subcollections; clean them up
+            # explicitly since these records are only ever disposable/eligible-demo.
+            for sub_name in ("events", "evidence"):
+                for sub_doc in doc_ref.collection(sub_name).stream():
+                    sub_doc.reference.delete()
+            doc_ref.delete()
+            confirm = doc_ref.get()
+            deleted = not confirm.exists
+            if deleted:
+                self._fallback_store.delete_run(run_id)
+            return deleted
+        except Exception as e:
+            logger.error("Firestore error in delete_run for '%s': %s", run_id, e)
+            if not self.fallback_on_error:
+                raise
+            return False
+
+    def acquire_lease(
+        self, run_id: str, job_id: str, lease_seconds: int = LEASE_TTL_SECONDS
+    ) -> tuple[LeaseOutcome, AssuranceRunRecord | None]:
+        """Transactionally atomic lease acquisition: uses a Firestore transaction
+        so two concurrent Pub/Sub deliveries for the same mission can never both
+        observe the record as unleased and both begin executing it."""
+        if self._db is None:
+            return self._fallback_store.acquire_lease(run_id, job_id, lease_seconds)
+
+        from google.cloud import firestore
+
+        from app.services.mission_transitions import TERMINAL_STATUSES
+
+        doc_ref = self._db.collection("assurance_runs").document(run_id)
+
+        @firestore.transactional
+        def _txn(transaction: Any) -> tuple[LeaseOutcome, AssuranceRunRecord | None]:
+            snapshot = doc_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                return LeaseOutcome.NOT_FOUND, None
+
+            record = AssuranceRunRecord.model_validate(snapshot.to_dict())
+            status_str = record.status.value if hasattr(record.status, "value") else str(record.status)
+            if status_str in TERMINAL_STATUSES:
+                return LeaseOutcome.ALREADY_TERMINAL, record
+
+            meta = record.metadata if isinstance(record.metadata, dict) else {}
+            last_hb = meta.get("last_heartbeat_at")
+            if status_str == "RUNNING" and last_hb:
+                try:
+                    hb_dt = datetime.fromisoformat(last_hb) if isinstance(last_hb, str) else last_hb
+                    if hb_dt.tzinfo is None:
+                        hb_dt = hb_dt.replace(tzinfo=UTC)
+                    if (datetime.now(UTC) - hb_dt).total_seconds() < lease_seconds:
+                        return LeaseOutcome.ALREADY_LEASED, record
+                except Exception:
+                    pass
+
+            record.status = AssuranceRunStatus.RUNNING
+            record.workflow_stage = "RUNNING"
+            if record.started_at is None:
+                record.started_at = datetime.now(UTC)
+            if not isinstance(record.metadata, dict):
+                record.metadata = {}
+            record.metadata["last_heartbeat_at"] = datetime.now(UTC).isoformat()
+            record.metadata["lease_owner"] = job_id
+            record.updated_at = datetime.now(UTC)
+
+            clean_payload = sanitize_for_firestore(record.model_dump(mode="json"))
+            transaction.set(doc_ref, clean_payload, merge=True)
+            return LeaseOutcome.ACQUIRED, record
+
+        try:
+            transaction = self._db.transaction()
+            outcome, record = _txn(transaction)
+            if record is not None:
+                self._fallback_store.update_run(record)
+            return outcome, record
+        except Exception as e:
+            logger.error("Firestore error in acquire_lease for '%s': %s", run_id, e)
+            if not self.fallback_on_error:
+                raise
+            return self._fallback_store.acquire_lease(run_id, job_id, lease_seconds)

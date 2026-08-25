@@ -24,17 +24,57 @@ class AssuranceWorker:
         self.ingestion_service = ingestion_service or PricingSourceIngestionService()
 
     def process_job(self, job: AssuranceJob) -> dict[str, Any]:
-        """Processes an assurance job with strict idempotency and event timeline tracking."""
-        logger.info("PUBSUB_RECEIVED: Worker received job '%s' (Run ID: %s, Job Type: %s)", job.job_id, job.run_id, job.job_type)
+        """Processes an assurance job with strict idempotency and event timeline tracking.
 
-        # Route Mission V2 jobs vs Legacy RUN-* jobs
-        if job.run_id.startswith("MIS-") or job.job_type == "ASSURANCE_MISSION_V2":
-            if job.run_id.startswith("MIS-"):
-                from app.services.mission_execution_service import MissionExecutionService
+        The `run_id` ID scheme (`MIS-*` vs anything else) is the authoritative,
+        unambiguous dispatch key — it is how mission vs. legacy-run IDs are actually
+        allocated at creation time. `job_type` is independently validated as a
+        consistency check ONLY for `MIS-*` ids, where any value other than
+        "ASSURANCE_MISSION_V2" indicates a genuine bug and is rejected loudly rather
+        than silently routed to the legacy handler. A non-`MIS-*` run_id is always
+        explicitly (not silently) routed to the legacy handler, regardless of its
+        job_type value, since legacy jobs are not guaranteed to carry a job_type
+        distinct from the schema default.
+        """
+        is_v2_run_id = job.run_id.startswith("MIS-")
 
-                return MissionExecutionService.execute_job(job)
+        logger.info(
+            "PUBSUB_RECEIVED: Worker received job '%s' (Run ID: %s, Job Type: %s)",
+            job.job_id,
+            job.run_id,
+            job.job_type,
+        )
 
-        # Legacy Assurance Run Path
+        if is_v2_run_id:
+            if job.job_type != "ASSURANCE_MISSION_V2":
+                logger.error(
+                    "JOB_ROUTING_MISMATCH: job_id='%s' run_id='%s' uses the Mission V2 ID "
+                    "scheme but job_type='%s' (expected 'ASSURANCE_MISSION_V2'). Refusing "
+                    "to guess; this job is not dispatched to either pipeline.",
+                    job.job_id,
+                    job.run_id,
+                    job.job_type,
+                )
+                return {
+                    "status": "FAILED",
+                    "job_id": job.job_id,
+                    "run_id": job.run_id,
+                    "error": "JOB_ROUTING_MISMATCH",
+                    "detail": (
+                        f"run_id '{job.run_id}' has the MIS- prefix but job_type="
+                        f"'{job.job_type}' — expected 'ASSURANCE_MISSION_V2'."
+                    ),
+                }
+
+            from app.services.mission_execution_service import MissionExecutionService
+
+            return MissionExecutionService.execute_job(job)
+
+        logger.info(
+            "LEGACY_JOB_ROUTED: run_id '%s' does not use the Mission V2 'MIS-' ID scheme; "
+            "routing explicitly to the legacy assurance run handler.",
+            job.run_id,
+        )
         return self._process_legacy_job(job)
 
     def _process_legacy_job(self, job: AssuranceJob) -> dict[str, Any]:

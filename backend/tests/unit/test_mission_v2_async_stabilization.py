@@ -172,8 +172,10 @@ def test_execution_lease_skips_duplicate_delivery():
     assert res["status"] == "SKIPPED_ALREADY_COMPLETED"
 
 
-def test_invalid_mission_creation_returns_400_without_enqueuing():
-    """Proves invalid missions fail synchronously with HTTP 400 and are never enqueued."""
+def test_invalid_mission_creation_returns_422_without_enqueuing():
+    """Proves invalid missions fail synchronously with a structured HTTP 422 (field,
+    code, message per issue) and are never enqueued. source_a is intentionally
+    omitted here too: with hidden demo defaults removed, that alone must be rejected."""
     payload = {
         "name": "Invalid Runtime Mission",
         "mode": "RUNTIME_VERIFICATION",
@@ -183,9 +185,14 @@ def test_invalid_mission_creation_returns_400_without_enqueuing():
     }
 
     res = client.post("/api/v1/missions", json=payload)
-    assert res.status_code == 400
+    assert res.status_code == 422
     data = res.json()
     assert "detail" in data
+    assert "issues" in data["detail"]
+    issue_fields = {i["field"] for i in data["detail"]["issues"]}
+    assert "source_a" in issue_fields
+    for issue in data["detail"]["issues"]:
+        assert {"field", "code", "message"} <= set(issue.keys())
 
 
 def test_completed_mission_delete_returns_409_conflict():

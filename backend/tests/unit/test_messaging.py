@@ -107,6 +107,59 @@ def test_assurance_worker_idempotency_skips_completed():
     assert not runner.run_assurance.called
 
 
+def test_worker_routes_legacy_run_id_to_legacy_handler_regardless_of_job_type():
+    """Legacy RUN-* jobs currently carry the AssuranceJob.job_type default
+    ('ASSURANCE_MISSION_V2') because that field's default isn't legacy-aware — the
+    run_id ID scheme, not job_type, must remain the authoritative dispatch key so
+    these are NOT misrouted or rejected."""
+    store = InMemoryRunStore()
+    runner = MagicMock()
+    mock_report = MagicMock()
+    mock_report.status = "PASS"
+    mock_report.executive_summary = "ok"
+    mock_report.evidence_refs = []
+    runner.run_assurance.return_value = mock_report
+
+    worker = AssuranceWorker(run_store=store, runner=runner)
+    job = AssuranceJob(job_id="JOB-LEGACY-1", run_id="RUN-LEGACY-1")  # job_type defaults to ASSURANCE_MISSION_V2
+
+    res = worker.process_job(job)
+
+    assert res["status"] == "COMPLETED"
+    assert runner.run_assurance.called
+
+
+def test_worker_rejects_mission_v2_id_with_mismatched_job_type():
+    """A MIS-* run_id with a job_type other than 'ASSURANCE_MISSION_V2' is a genuine
+    bug and must fail with a structured error — never silently dispatched to either
+    pipeline."""
+    store = InMemoryRunStore()
+    store.save_run(AssuranceRunRecord(run_id="MIS-MISMATCH-1", status=AssuranceRunStatus.QUEUED))
+    worker = AssuranceWorker(run_store=store, runner=MagicMock())
+
+    job = AssuranceJob(job_id="JOB-MISMATCH-1", run_id="MIS-MISMATCH-1", job_type="SOME_OTHER_TYPE")
+
+    res = worker.process_job(job)
+
+    assert res["status"] == "FAILED"
+    assert res["error"] == "JOB_ROUTING_MISMATCH"
+
+
+def test_worker_dispatches_mission_v2_id_with_matching_job_type():
+    store = InMemoryRunStore()
+    store.save_run(AssuranceRunRecord(run_id="MIS-MATCH-1", status=AssuranceRunStatus.QUEUED))
+    worker = AssuranceWorker(run_store=store, runner=MagicMock())
+
+    job = AssuranceJob(job_id="JOB-MATCH-1", run_id="MIS-MATCH-1", job_type="ASSURANCE_MISSION_V2")
+
+    with patch("app.services.mission_execution_service.MissionExecutionService.execute_job") as mock_exec:
+        mock_exec.return_value = {"status": "RUNNING", "mission_id": "MIS-MATCH-1"}
+        res = worker.process_job(job)
+
+    mock_exec.assert_called_once_with(job)
+    assert res["status"] == "RUNNING"
+
+
 def test_factory_returns_memory_publisher_when_local():
     """Verifies factory returns InMemoryPublisher when execution_mode is local or async is disabled."""
     with patch("app.messaging.get_settings") as mock_get_settings:

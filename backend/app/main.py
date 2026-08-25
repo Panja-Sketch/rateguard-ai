@@ -9,6 +9,7 @@ from app.api.demo_rating import router as demo_rating_router
 from app.api.health import router as health_router
 from app.api.missions import router as missions_router
 from app.api.sources import router as sources_router
+from app.api.system_status import router as system_status_router
 from app.api.worker_endpoint import router as worker_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -46,6 +47,7 @@ app.include_router(missions_router)
 app.include_router(demo_rating_router)
 app.include_router(sources_router)
 app.include_router(worker_router)
+app.include_router(system_status_router)
 
 
 @app.get("/", summary="Root Status Endpoint")

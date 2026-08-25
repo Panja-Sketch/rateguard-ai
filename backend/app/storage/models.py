@@ -88,3 +88,13 @@ class AssuranceRunRecord(BaseModel):
     decision: str | None = None
     summary: str | None = None
     report: Any = None
+
+    # Lifecycle tracking fields (optional for backward compatibility with records
+    # persisted before these fields existed; absent on old records defaults apply).
+    status_reason: str | None = None
+    current_stage: str | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    attempt_number: int = 1
+    cancellation_requested: bool = False

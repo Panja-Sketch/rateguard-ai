@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from app.storage import (
     AssuranceRunRecord,
     EvidenceRecord,
@@ -50,8 +52,16 @@ def test_01_in_memory_run_store_lifecycle() -> None:
 
 
 def test_02_firestore_run_store_fallback_in_unit_test() -> None:
-    # FirestoreRunStore falls back cleanly to InMemoryRunStore when offline / unauthenticated
-    store = FirestoreRunStore(project_id="rateguard-ai", fallback_on_error=True)
+    """FirestoreRunStore falls back cleanly to InMemoryRunStore when Firestore is
+    unavailable. This is forced deterministically (client construction mocked to
+    fail) rather than relying on the test environment having no ambient GCP
+    credentials — a dev machine with `gcloud auth application-default login`
+    configured for the real 'rateguard-ai' project would otherwise cause this test
+    to silently read/write against LIVE production Firestore."""
+    with patch("google.cloud.firestore.Client", side_effect=RuntimeError("no credentials in unit test")):
+        store = FirestoreRunStore(project_id="unit-test-fake-project", fallback_on_error=True)
+
+    assert store._db is None
 
     run = AssuranceRunRecord(
         run_id="RUN-FS-001",

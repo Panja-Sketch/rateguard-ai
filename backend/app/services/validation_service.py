@@ -131,12 +131,20 @@ class MissionValidationService:
                 )
 
         elif mission.mode == ComparisonMode.EQUIVALENCE:
-            if not mission.source_a or not mission.source_b:
+            if not mission.source_a or not mission.source_a.source_id:
                 issues.append(
                     ValidationIssue(
-                        field="sources",
+                        field="source_a",
                         code="REQUIRED",
-                        message="Both Source A and Source B are required for Equivalence comparison mode.",
+                        message="Source A must be explicitly selected for Equivalence comparison mode.",
+                    )
+                )
+            if not mission.source_b or not mission.source_b.source_id:
+                issues.append(
+                    ValidationIssue(
+                        field="source_b",
+                        code="REQUIRED",
+                        message="Source B must be explicitly selected for Equivalence comparison mode.",
                     )
                 )
 

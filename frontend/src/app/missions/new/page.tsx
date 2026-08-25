@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createAssuranceMission, testRatingApiConnector } from '@/lib/api/client';
-import { ComparisonMode, RuntimeConnectorConfig } from '@/lib/types/assurance';
+import { ApiError, createAssuranceMission, testRatingApiConnector } from '@/lib/api/client';
+import { ComparisonMode, RuntimeConnectorConfig, ValidationIssue } from '@/lib/types/assurance';
 import {
   Play,
   CheckCircle2,
@@ -18,7 +18,10 @@ import {
   ShieldCheck,
   Globe,
   Sliders,
+  Sparkles,
 } from 'lucide-react';
+
+const DEMO_RATING_ENDPOINT_URL = 'http://localhost:8000/api/v1/demo-rating/quote';
 
 export default function NewMissionPage() {
   const router = useRouter();
@@ -43,15 +46,29 @@ export default function NewMissionPage() {
 
   const [sampleTargetType, setSampleTargetType] = useState<'DEFECTIVE' | 'CLEAN'>('DEFECTIVE');
 
-  // Rating API Connector State
-  const [connectorName, setConnectorName] = useState('Synthetic External Rating API');
-  const [connectorUrl, setConnectorUrl] = useState('http://localhost:8000/api/v1/demo-rating/quote');
+  // Rating API Connector State — no hidden default: the field starts empty and is
+  // only ever pre-filled when the user explicitly opts into the demo endpoint below.
+  const [connectorName, setConnectorName] = useState('');
+  const [connectorUrl, setConnectorUrl] = useState('');
   const [connectorMethod, setConnectorMethod] = useState('POST');
   const [connectorAuthType, setConnectorAuthType] = useState<'none' | 'api_key' | 'bearer'>('none');
   const [connectorPremiumField, setConnectorPremiumField] = useState('premium');
   const [connectorTestResult, setConnectorTestResult] = useState<{ status: string; premium?: string } | null>(null);
+  const [useDemoRatingEndpoint, setUseDemoRatingEndpoint] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
+  const [fieldIssues, setFieldIssues] = useState<ValidationIssue[]>([]);
+
+  const handleToggleDemoEndpoint = (checked: boolean) => {
+    setUseDemoRatingEndpoint(checked);
+    if (checked) {
+      setConnectorName('Built-in Demo Rating Endpoint');
+      setConnectorUrl(DEMO_RATING_ENDPOINT_URL);
+    } else if (connectorUrl === DEMO_RATING_ENDPOINT_URL) {
+      setConnectorName('');
+      setConnectorUrl('');
+    }
+  };
 
   // Field Level Validation Rules
   const validateCurrentStep = () => {
@@ -97,9 +114,16 @@ export default function NewMissionPage() {
     }
   };
 
+  // This wizard only ever offers bundled sample sources for RELEASE_CONFORMANCE /
+  // EQUIVALENCE (there is no real upload picker here — that lives on /sources), so
+  // those modes are always explicitly marked as a demo sample. Runtime Verification
+  // is a demo sample only when the user explicitly checked "use demo endpoint" below.
+  const isDemoSampleMission = mode !== 'RUNTIME_VERIFICATION' || useDemoRatingEndpoint;
+
   const handleStartMission = async () => {
     setLoading(true);
     setError(null);
+    setFieldIssues([]);
     try {
       const sourceB =
         mode === 'RUNTIME_VERIFICATION'
@@ -138,6 +162,7 @@ export default function NewMissionPage() {
         source_b: sourceB,
         runtime_connector: connectorConfig,
         disposable_sample_run: true,
+        is_demo_sample: isDemoSampleMission,
       };
 
       const res = await createAssuranceMission(payload);
@@ -145,8 +170,14 @@ export default function NewMissionPage() {
         router.push(`/missions/${res.mission_id}`);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+      // Structured 422 validation errors must render inline, not crash the page.
+      if (err instanceof ApiError && err.issues && err.issues.length > 0) {
+        setFieldIssues(err.issues);
+        setError(null);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+      }
       setLoading(false);
     }
   };
@@ -169,6 +200,18 @@ export default function NewMissionPage() {
       {error && (
         <div className="rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-300 font-mono">
           [Validation / Mission Error] {error}
+        </div>
+      )}
+
+      {fieldIssues.length > 0 && (
+        <div className="rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-300 space-y-1.5 font-mono">
+          <div className="font-bold font-sans">Mission validation failed:</div>
+          {fieldIssues.map((issue, idx) => (
+            <div key={idx}>
+              <span className="text-rose-400 font-bold">{issue.field}</span>
+              <span className="text-rose-500"> [{issue.code}]</span>: {issue.message}
+            </div>
+          ))}
         </div>
       )}
 
@@ -323,6 +366,24 @@ export default function NewMissionPage() {
                 </span>
               </div>
 
+              <label className="flex items-start gap-2.5 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs text-amber-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useDemoRatingEndpoint}
+                  onChange={(e) => handleToggleDemoEndpoint(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-bold flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5" /> Use demo sample endpoint
+                  </span>
+                  <span className="block text-amber-200/80 mt-0.5">
+                    Points at RateGuard&apos;s bundled synthetic rating microservice instead of a real connector.
+                    Never selected automatically — leave unchecked to enter your own endpoint below.
+                  </span>
+                </span>
+              </label>
+
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-300">Connector Name *</label>
@@ -339,11 +400,16 @@ export default function NewMissionPage() {
                   <input
                     type="text"
                     value={connectorUrl}
-                    onChange={(e) => setConnectorUrl(e.target.value)}
-                    placeholder="http://localhost:8000/api/v1/demo-rating/quote"
+                    onChange={(e) => {
+                      setConnectorUrl(e.target.value);
+                      if (useDemoRatingEndpoint && e.target.value !== DEMO_RATING_ENDPOINT_URL) {
+                        setUseDemoRatingEndpoint(false);
+                      }
+                    }}
+                    placeholder="https://your-rating-api.example.com/quote"
                     className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white focus:border-purple-500 focus:outline-none"
                   />
-                  <p className="text-[10px] text-slate-500">HTTPS is strictly required outside localhost.</p>
+                  <p className="text-[10px] text-slate-500">HTTPS is strictly required outside localhost. Left empty by default — no hidden default endpoint is submitted.</p>
                 </div>
 
                 <div className="space-y-1">
@@ -393,7 +459,16 @@ export default function NewMissionPage() {
             </div>
           ) : (
             /* Release Conformance / Equivalence Source Selection */
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  <strong className="font-bold">Demo sample.</strong> This wizard only offers RateGuard&apos;s bundled
+                  Arizona HO3 sample sources. To compare your own uploaded filings or engine configs, use the{' '}
+                  <a href="/sources" className="underline hover:text-amber-100">Sources</a> page instead.
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               {/* Source A */}
               <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
                 <div className="flex justify-between items-center">
@@ -440,6 +515,7 @@ export default function NewMissionPage() {
                     </button>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           )}

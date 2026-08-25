@@ -73,7 +73,9 @@ class AssuranceResultV2(BaseModel):
         default_factory=lambda: {
             "model_id": "gemini-3.7-flash",
             "framework": "Google ADK",
-            "model_status": "Ready",
+            # Honest default: no live Gemini invocation has occurred until a caller
+            # explicitly overrides this with real invocation evidence.
+            "model_status": "NOT_INVOKED_DETERMINISTIC_PIPELINE",
         }
     )
     validation: SectionResult[list[ValidationIssue]] = Field(

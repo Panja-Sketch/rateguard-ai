@@ -196,6 +196,10 @@ class AssuranceMission(BaseModel):
     source_b: PricingSourceRef | None = None
     runtime_connector: RuntimeConnectorConfig | None = None
     disposable_sample_run: bool = False
+    is_demo_sample: bool = Field(
+        default=False,
+        description="True only when the user explicitly opted into a built-in demo/sample source or connector.",
+    )
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
