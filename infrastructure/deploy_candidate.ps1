@@ -386,12 +386,9 @@ function Deploy-CandidateFrontend {
         "--no-traffic", "--tag", $CANDIDATE_TAG, "--allow-unauthenticated"
     )
 
-    $webInfo = Get-CandidateServiceInfo -ServiceName "rateguard-web"
-    $webTaggedUrl = Get-CandidateTaggedUrl -ServiceInfo $webInfo -Tag $CANDIDATE_TAG
-    if (-not (Test-AbsoluteHttpsUrl -Url $webTaggedUrl -RequiredHostFragment "rateguard-web" -RequireCandidateTagPrefix)) {
-        throw "Candidate web tagged URL could not be discovered after deployment. Refusing to print success."
-    }
-    return $webTaggedUrl
+    # Get-SingleCandidateTaggedUrl guarantees exactly one nonempty scalar
+    # [string] or throws -- see its doc comment in CandidateDeployLib.ps1.
+    return Get-SingleCandidateTaggedUrl -ServiceInfo (Get-CandidateServiceInfo -ServiceName "rateguard-web") -Tag $CANDIDATE_TAG -ServiceHostFragment "rateguard-web"
 }
 
 function Confirm-CandidatePostconditions {
@@ -666,10 +663,13 @@ function Resume-Candidate {
 
     Write-Host "6. Checking for an existing candidate frontend revision..."
     $webInfo = Get-CandidateServiceInfo -ServiceName "rateguard-web"
-    $existingWebUrl = Get-CandidateTaggedUrl -ServiceInfo $webInfo -Tag $CANDIDATE_TAG
-    if (Test-AbsoluteHttpsUrl -Url $existingWebUrl -RequiredHostFragment "rateguard-web" -RequireCandidateTagPrefix) {
-        Write-Host "   Candidate frontend revision already exists ($existingWebUrl) -- skipping frontend build/deploy."
-        $webUrl = $existingWebUrl
+    if (Test-CandidateTaggedUrlExists -ServiceInfo $webInfo -Tag $CANDIDATE_TAG) {
+        # At least one candidate-tagged entry exists -- validate it strictly
+        # rather than silently accepting it. Any anomaly here (more than one
+        # entry, an invalid URL, nonzero traffic on the tag) throws and stops
+        # the resume rather than deploying on top of an already-broken state.
+        $webUrl = Get-SingleCandidateTaggedUrl -ServiceInfo $webInfo -Tag $CANDIDATE_TAG -ServiceHostFragment "rateguard-web"
+        Write-Host "   Candidate frontend revision already exists ($webUrl) -- skipping frontend build/deploy."
     } else {
         Write-Host "   Candidate frontend revision missing -- building and deploying it now using the SAME supplied tag ($CandidateImageTag), so all candidate artifacts represent the same application-source checkpoint."
         $webUrl = Deploy-CandidateFrontend -CandidateApiUrl $urls.ApiTaggedUrl -ImageTag $CandidateImageTag -FrontendImage $resumeFrontendImage

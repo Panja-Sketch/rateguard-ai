@@ -26,6 +26,21 @@ function Invoke-NativeCommand {
     PowerShell 5.1, `2>&1` on a native command wraps each stderr line in a
     NativeCommandError record and flips $?, even on a genuine exit code 0.
     stderr is left to stream directly to the console instead.
+
+    Output-pollution guard: without -CaptureOutput, the native command's
+    stdout is explicitly piped to Out-Null and this function executes NO
+    `return` statement at all -- it produces zero objects on its own output
+    stream. This matters because PowerShell functions implicitly emit
+    everything not otherwise consumed: an unassigned/bare-statement call
+    like `Invoke-NativeCommand -Operation X -FilePath gcloud -ArgumentList
+    @(...)` (no -CaptureOutput, result not assigned) previously leaked
+    gcloud's own stdout -- and even a bare `return $null` -- straight into
+    the CALLING function's return value, silently turning a single expected
+    string (e.g. a discovered Cloud Run URL) into a multi-element
+    System.Object[]. Binding a System.Object[] (even one element) to a
+    downstream `[string]` parameter fails with "Cannot process argument
+    transformation ... Cannot convert value to type System.String." -- this
+    is exactly the WebUrl postcondition failure this guard fixes.
     #>
     [CmdletBinding()]
     param(
@@ -38,8 +53,7 @@ function Invoke-NativeCommand {
     if ($CaptureOutput) {
         $output = & $FilePath @ArgumentList
     } else {
-        & $FilePath @ArgumentList
-        $output = $null
+        & $FilePath @ArgumentList | Out-Null
     }
 
     $exitCode = $LASTEXITCODE
@@ -49,7 +63,7 @@ function Invoke-NativeCommand {
         throw "Native command failed: $Operation (exit code $exitCode)"
     }
 
-    return $output
+    if ($CaptureOutput) { return $output }
 }
 
 function ConvertFrom-CloudRunServiceJson {
@@ -92,6 +106,64 @@ function Get-CandidateTaggedUrl {
     $match = @($traffic) | Where-Object { $_.tag -eq $Tag } | Select-Object -First 1
     if (-not $match -or -not $match.url) { return $null }
     return [string]$match.url
+}
+
+function Test-CandidateTaggedUrlExists {
+    <# Boolean, non-throwing check for "does at least one traffic entry
+    carry this tag at all" -- used to distinguish "not deployed yet"
+    (legitimately normal, e.g. during -ResumeCandidate's frontend check)
+    from "deployed but something about it is wrong" (which
+    Get-SingleCandidateTaggedUrl below reports precisely, by throwing). #>
+    param(
+        [Parameter(Mandatory = $true)]$ServiceInfo,
+        [Parameter(Mandatory = $true)][string]$Tag
+    )
+    $traffic = $ServiceInfo.status.traffic
+    if (-not $traffic) { return $false }
+    return (@(@($traffic) | Where-Object { $_.tag -eq $Tag })).Count -gt 0
+}
+
+function Get-SingleCandidateTaggedUrl {
+    <#
+    Strict candidate-tagged URL discovery. Guarantees the return value is
+    exactly one nonempty scalar [string] or the function throws -- it never
+    returns $null, an array, or a malformed URL. Validates, in order:
+      - exactly one traffic entry carries the tag (zero or more than one is
+        reported precisely rather than silently picking the first);
+      - the URL is present, absolute, and HTTPS;
+      - the URL's host belongs to the named service;
+      - the URL's host begins with the candidate-tag hostname form
+        ("candidate---...");
+      - the tagged entry itself carries no production traffic (0%).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$ServiceInfo,
+        [Parameter(Mandatory = $true)][string]$Tag,
+        [Parameter(Mandatory = $true)][string]$ServiceHostFragment
+    )
+    $traffic = $ServiceInfo.status.traffic
+    $matches = @()
+    if ($traffic) { $matches = @(@($traffic) | Where-Object { $_.tag -eq $Tag }) }
+
+    if ($matches.Count -eq 0) {
+        throw "No traffic entry with tag='$Tag' was found for the '$ServiceHostFragment' service."
+    }
+    if ($matches.Count -gt 1) {
+        throw "$($matches.Count) traffic entries with tag='$Tag' were found for the '$ServiceHostFragment' service; expected exactly one. Refusing to guess which is authoritative."
+    }
+
+    $entry = $matches[0]
+    $url = if ($entry.url) { [string]$entry.url } else { $null }
+
+    if (-not (Test-AbsoluteHttpsUrl -Url $url -RequiredHostFragment $ServiceHostFragment -RequireCandidateTagPrefix)) {
+        throw "The tag='$Tag' traffic entry for '$ServiceHostFragment' does not have a valid candidate URL (must be absolute HTTPS, on a 'candidate---' host, containing '$ServiceHostFragment'). Got: '$url'"
+    }
+
+    if ($entry.percent -and [int]$entry.percent -gt 0) {
+        throw "The tag='$Tag' traffic entry for '$ServiceHostFragment' carries $($entry.percent)% production traffic; expected 0%."
+    }
+
+    return [string]$url
 }
 
 function Get-UntaggedServiceUrl {

@@ -261,6 +261,95 @@ Describe "Invoke-NativeCommand fail-fast" {
         $global:__reached_after_failure | Should Be $false
         Remove-Variable -Name __reached_after_failure -Scope Global -ErrorAction SilentlyContinue
     }
+
+    It "REGRESSION (WebUrl postcondition failure): without -CaptureOutput, a chatty native command's stdout does not leak into the calling function's return value" {
+        # Reproduces the exact failure mode observed after the frontend
+        # deploy step: a real native process that prints several stdout
+        # lines (standing in for gcloud build/deploy progress output),
+        # invoked as a bare/unassigned statement (exactly how
+        # Deploy-CandidateFrontend calls the Cloud Build and Cloud Run
+        # deploy steps), followed by a `return` of a single URL-like string.
+        # Before the fix, the calling function's return value was a
+        # System.Object[] containing the leaked lines plus the URL; binding
+        # THAT to a downstream [string] parameter is exactly what threw
+        # "Cannot process argument transformation on parameter 'WebUrl'.
+        # Cannot convert value to type System.String."
+        $wrapper = {
+            Invoke-NativeCommand -Operation "chatty build-like command" -FilePath "cmd.exe" -ArgumentList @(
+                "/c", "echo Creating tarball...& echo Uploading...& echo Build succeeded"
+            )
+            Invoke-NativeCommand -Operation "chatty deploy-like command" -FilePath "cmd.exe" -ArgumentList @(
+                "/c", "echo Deploying container...& echo Service URL noise"
+            )
+            return "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"
+        }
+
+        $result = & $wrapper
+
+        $result.GetType().FullName | Should Be "System.String"
+        @($result).Count | Should Be 1
+        $result | Should Be "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"
+
+        function Consume-WebUrlLikeCompleteCandidateDeployment {
+            param([Parameter(Mandatory = $true)][string]$WebUrl)
+            return $WebUrl
+        }
+        { Consume-WebUrlLikeCompleteCandidateDeployment -WebUrl $result } | Should Not Throw
+    }
+
+    It "without -CaptureOutput, the function itself produces zero pipeline objects (not even `$null`)" {
+        $script = { Invoke-NativeCommand -Operation "silent success" -FilePath "cmd.exe" -ArgumentList @("/c", "exit", "0") }
+        $emitted = @(& $script)
+        $emitted.Count | Should Be 0
+    }
+}
+
+Describe "Get-SingleCandidateTaggedUrl / Test-CandidateTaggedUrlExists" {
+
+    It "returns exactly one nonempty scalar string for a well-formed single candidate-tag entry" {
+        $info = New-WebServiceInfoWithCandidateTag
+        $url = Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web"
+        $url.GetType().FullName | Should Be "System.String"
+        @($url).Count | Should Be 1
+        $url | Should Be "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"
+    }
+
+    It "throws when no traffic entry carries the tag" {
+        $info = New-WebServiceInfoNoCandidateTag
+        { Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web" } | Should Throw "No traffic entry"
+    }
+
+    It "Test-CandidateTaggedUrlExists is false when absent and true when present (non-throwing, used to decide missing-vs-broken)" {
+        (Test-CandidateTaggedUrlExists -ServiceInfo (New-WebServiceInfoNoCandidateTag) -Tag "candidate") | Should Be $false
+        (Test-CandidateTaggedUrlExists -ServiceInfo (New-WebServiceInfoWithCandidateTag) -Tag "candidate") | Should Be $true
+    }
+
+    It "throws when more than one traffic entry carries the tag, rather than silently picking the first" {
+        $info = '{
+            "status": {
+                "traffic": [
+                    { "revisionName": "rateguard-web-00009-abc", "tag": "candidate", "url": "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" },
+                    { "revisionName": "rateguard-web-00010-kup", "tag": "candidate", "url": "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" }
+                ]
+            }
+        }' | ConvertFrom-Json
+        { Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web" } | Should Throw "expected exactly one"
+    }
+
+    It "throws on a relative/malformed URL rather than returning it" {
+        $info = '{ "status": { "traffic": [ { "tag": "candidate", "url": "/internal/pubsub/assurance" } ] } }' | ConvertFrom-Json
+        { Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web" } | Should Throw
+    }
+
+    It "throws when the candidate-tagged entry carries nonzero production traffic" {
+        $info = '{ "status": { "traffic": [ { "tag": "candidate", "percent": 10, "url": "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" } ] } }' | ConvertFrom-Json
+        { Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web" } | Should Throw "production traffic"
+    }
+
+    It "throws when the URL belongs to a different service" {
+        $info = New-ApiServiceInfoWithCandidateTag
+        { Get-SingleCandidateTaggedUrl -ServiceInfo $info -Tag "candidate" -ServiceHostFragment "rateguard-web" } | Should Throw
+    }
 }
 
 Describe "ConvertFrom-CloudRunServiceJson" {
@@ -331,6 +420,42 @@ Describe "deploy_candidate.ps1 orchestration" {
         } | Should Not Throw
         $global:__banner_printed | Should Be $true
         Remove-Variable -Name __banner_printed -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "REGRESSION: Deploy-CandidateFrontend returns exactly one nonempty scalar string, end to end, and it binds cleanly into Complete-CandidateDeployment's [string]`$WebUrl" {
+        # Mirrors the observed failing run: backend/API/worker already good,
+        # frontend build+deploy succeed, rateguard-web-00010-kup ends up
+        # candidate-tagged at 0% traffic. Deploy-CandidateFrontend's own
+        # Cloud Build / Cloud Run deploy calls are unassigned bare
+        # statements (not -CaptureOutput) -- exactly the shape that leaked
+        # before the Invoke-NativeCommand fix.
+        Mock Invoke-NativeCommand {
+            param($Operation, $FilePath, $ArgumentList, [switch]$CaptureOutput)
+            if ($CaptureOutput) { return @("sha256:0f998617ca6426dba06d8b5b8d8617934305170c9c07e62b94acb222dfc3f715") }
+        }
+        Mock Get-CandidateServiceInfo { New-WebServiceInfoWithCandidateTag }
+        # This test isolates the WebUrl type/binding fix specifically; full
+        # postcondition semantics are already covered by the two tests above.
+        Mock Confirm-CandidatePostconditions { return @() }
+        Mock Write-SuccessBanner { }
+
+        $webUrl = Deploy-CandidateFrontend -CandidateApiUrl "https://candidate---rateguard-api-iqofutwtva-uc.a.run.app" `
+            -ImageTag "candidate-23cfc95b5949" -FrontendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-web:candidate-23cfc95b5949"
+
+        $webUrl.GetType().FullName | Should Be "System.String"
+        @($webUrl).Count | Should Be 1
+        $webUrl | Should Be "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"
+
+        {
+            Complete-CandidateDeployment -Urls ([pscustomobject]@{
+                    ApiTaggedUrl      = "https://candidate---rateguard-api-iqofutwtva-uc.a.run.app"
+                    WorkerTaggedUrl   = "https://candidate---rateguard-worker-iqofutwtva-uc.a.run.app"
+                    WorkerUntaggedUrl = "https://rateguard-worker-iqofutwtva-uc.a.run.app"
+                }) -WebUrl $webUrl `
+                -ExpectedBackendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-api:candidate-23cfc95b5949" `
+                -ExpectedFrontendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-web:candidate-23cfc95b5949" `
+                -ImageTag "candidate-23cfc95b5949"
+        } | Should Not Throw
     }
 
     It "resume requires -CandidateImageTag (rejected at the CLI-argument gate before any resume logic runs)" {
