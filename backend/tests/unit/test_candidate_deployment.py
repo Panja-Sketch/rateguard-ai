@@ -105,6 +105,19 @@ def test_deploy_candidate_immutable_image_tag_is_not_latest() -> None:
     assert tag.startswith("candidate-")
 
 
+def test_deploy_candidate_plan_adds_candidate_web_origin_to_cors_without_dropping_production() -> None:
+    """Regression: the candidate rateguard-web origin (a Cloud Run
+    traffic-tag URL) must be added to RATEGUARD_CORS_ORIGINS alongside --
+    never instead of -- the production origin already declared in
+    infrastructure/runtime-env.yaml. Missing this meant every browser
+    request from the candidate frontend was silently blocked by
+    CORSMiddleware even though a plain CLI/urllib client saw no failure."""
+    result = _run_bash_script("infrastructure/deploy_candidate.sh")
+    line = next(line for line in result.stdout.splitlines() if line.strip().startswith("RATEGUARD_CORS_ORIGINS="))
+    assert "https://rateguard-web-iqofutwtva-uc.a.run.app" in line
+    assert "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" in line
+
+
 def test_promote_candidate_refuses_without_digest() -> None:
     result = _run_bash_script("infrastructure/promote_candidate.sh")
     assert result.returncode == 2

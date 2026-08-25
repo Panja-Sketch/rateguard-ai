@@ -23,7 +23,7 @@ export default function RootLayout({
           <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-2">
             <div>RateGuard AI © 2026 — Continuous Pricing Assurance Engine</div>
             <div className="flex gap-4">
-              <span>Google ADK + Gemini 3.7 Flash</span>
+              <span>Gemini 3.7 Flash · Google Vertex AI · Google GenAI SDK</span>
               <span>BigQuery 50K Analytics</span>
               <span>Firestore RunState</span>
               <span>GCS Artifacts</span>

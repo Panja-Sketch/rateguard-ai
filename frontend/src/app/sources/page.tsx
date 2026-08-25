@@ -254,7 +254,7 @@ export default function SourcesPage() {
               <Play className="h-4 w-4 text-sky-400" /> Run Assurance on Ingested Sources
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Launch multi-agent assurance workflow directly comparing compiled Source A against Source B.
+              Launch agentic assurance workflow directly comparing compiled Source A against Source B.
             </p>
           </div>
 

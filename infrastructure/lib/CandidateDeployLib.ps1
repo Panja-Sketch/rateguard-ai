@@ -362,6 +362,53 @@ function Test-CandidateEnvIsolation {
     return $failures
 }
 
+function Get-CandidateCorsOrigins {
+    <#
+    Derives the candidate API's CORS allow-list from the production origins
+    already declared in infrastructure/runtime-env.yaml's
+    RATEGUARD_CORS_ORIGINS: every production origin is kept unchanged (never
+    replaced, never wildcarded), and one candidate origin is added per
+    non-localhost production origin by inserting the Cloud Run traffic-tag
+    prefix ("<tag>---") ahead of the host -- exactly how Cloud Run forms a
+    --tag candidate's own URL from the service's base URL (e.g.
+    "https://rateguard-web-iqofutwtva-uc.a.run.app" ->
+    "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"). Pure
+    function: takes the already-parsed production origins list, returns the
+    candidate list; no file I/O, no gcloud/network call. Mirrors
+    infrastructure/deploy_candidate.sh's get_candidate_cors_origins().
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string[]]$ProductionOrigins,
+        [Parameter(Mandatory = $true)][string]$CandidateTag
+    )
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($origin in $ProductionOrigins) { $result.Add($origin) | Out-Null }
+    foreach ($origin in $ProductionOrigins) {
+        if ($origin -notmatch '^(https?)://(.+)$') { continue }
+        $scheme = $Matches[1]
+        $hostPart = $Matches[2]
+        if ($hostPart.StartsWith('localhost') -or $hostPart.StartsWith('127.')) { continue }
+        $candidateOrigin = "${scheme}://${CandidateTag}---${hostPart}"
+        if (-not $result.Contains($candidateOrigin)) { $result.Add($candidateOrigin) | Out-Null }
+    }
+    # Plain return (no leading comma): matches this file's established
+    # list-returning convention (see Test-CandidateEnvIsolation's $failures)
+    # -- callers wrap the call in @(...) to collect it back into one array.
+    return $result.ToArray()
+}
+
+function ConvertTo-CompactJsonStringArray {
+    <#
+    Builds a compact JSON array-of-strings literal without relying on
+    ConvertTo-Json's pipeline-unwrapping behavior for single-element arrays
+    (Windows PowerShell 5.1 has no -AsArray switch). Values here are always
+    simple https:// origins, so only '"' and '\' need escaping.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Values)
+    $escaped = @($Values | ForEach-Object { '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"') + '"' })
+    return '[' + ($escaped -join ',') + ']'
+}
+
 function Test-ProductionTrafficUnchanged {
     <#
     Confirms the service's 100%-traffic entry (if any) is not the

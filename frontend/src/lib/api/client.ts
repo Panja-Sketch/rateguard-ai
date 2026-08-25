@@ -59,6 +59,31 @@ export async function fetchHealth(): Promise<{ status: string; service: string }
   return handleResponse<{ status: string; service: string }>(res);
 }
 
+/**
+ * True when `err` is the browser's own transport-level failure (DNS
+ * failure, connection refused, or a CORS-blocked response) rather than a
+ * structured API error. `fetch()` rejects with a bare `TypeError` in this
+ * case — never an ApiError, since no HTTP response was ever received to
+ * parse a body from. Distinguishing this is what lets callers show
+ * "RateGuard API is currently unreachable" instead of the browser's raw
+ * "Failed to fetch" message.
+ */
+export function isNetworkUnreachableError(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
+/** Renders `err` as user-facing text, replacing a raw transport failure
+ * with an actionable, non-technical message instead of the browser's
+ * "Failed to fetch". `context` names what didn't happen (e.g. "No mission
+ * was created.") so the message tells the user exactly what state they're
+ * left in. */
+export function describeFetchError(err: unknown, context: string): string {
+  if (isNetworkUnreachableError(err)) {
+    return `RateGuard API is currently unreachable. ${context}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function createAssuranceMission(params: {
   name: string;
   mode: string;
@@ -185,6 +210,8 @@ export async function fetchSystemInfo(): Promise<{
   gemini_model: string;
   gemini_model_display: string;
   agent_framework: string;
+  agent_provider: string;
+  agent_supervisor: string;
   ipir_version: string;
   cloud_project: string;
 }> {

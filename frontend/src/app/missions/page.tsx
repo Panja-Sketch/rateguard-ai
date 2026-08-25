@@ -8,6 +8,7 @@ import {
   deleteAssuranceMission,
   cancelAssuranceMission,
   retryAssuranceMission,
+  describeFetchError,
   ApiError,
 } from '@/lib/api/client';
 import { AssuranceMissionSummary, ComparisonMode } from '@/lib/types/assurance';
@@ -65,9 +66,12 @@ export default function MissionsHistoryPage() {
         status: statusFilter === 'ALL' ? undefined : statusFilter,
         decision: decisionFilter === 'ALL' ? undefined : decisionFilter,
       });
+      // Only ever replaces the list on a SUCCESSFUL load — a failed request
+      // (see catch below) leaves whatever was last successfully loaded in
+      // place, rather than fabricating an empty history.
       setMissions(res.missions || []);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeFetchError(err, 'Mission history could not be loaded.'));
     } finally {
       setLoading(false);
     }
@@ -166,8 +170,15 @@ export default function MissionsHistoryPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-300 font-mono">
-          [Error] {error}
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-300 font-mono">
+          <span>[Error] {error}</span>
+          <button
+            onClick={fetchMissions}
+            disabled={loading}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-700 bg-rose-900/60 px-3 py-1.5 font-sans font-semibold text-rose-200 hover:bg-rose-900 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Retry
+          </button>
         </div>
       )}
 
@@ -237,7 +248,13 @@ export default function MissionsHistoryPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
-            {missions.length === 0 ? (
+            {missions.length === 0 && error ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-sans">
+                  Mission history is unavailable right now — see the error above. This is not necessarily an empty history.
+                </td>
+              </tr>
+            ) : missions.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-sans">
                   No assurance missions found matching criteria.

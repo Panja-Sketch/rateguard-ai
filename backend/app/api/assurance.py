@@ -116,7 +116,9 @@ def get_system_info() -> dict[str, Any]:
     return {
         "gemini_model": agent_config.gemini_model,
         "gemini_model_display": "Gemini 3.7 Flash",
-        "agent_framework": "Google ADK",
+        "agent_framework": "Google GenAI SDK",
+        "agent_provider": "Google Vertex AI",
+        "agent_supervisor": "Google GenAI SDK Structured-Decision Supervisor",
         "ipir_version": "0.1",
         "cloud_project": settings.google_cloud_project,
         "region": settings.google_cloud_region,

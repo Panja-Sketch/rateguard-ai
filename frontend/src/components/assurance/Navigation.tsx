@@ -2,19 +2,26 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ShieldCheck, Cpu, FileCode2, History, Network } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { ShieldCheck, Cpu, FileCode2, History, Network, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { fetchHealth } from '@/lib/api/client';
 
 export function Navigation() {
   const pathname = usePathname();
   const [systemOnline, setSystemOnline] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
 
-  useEffect(() => {
+  const checkHealth = useCallback(() => {
+    setChecking(true);
     fetchHealth()
       .then(() => setSystemOnline(true))
-      .catch(() => setSystemOnline(false));
+      .catch(() => setSystemOnline(false))
+      .finally(() => setChecking(false));
   }, []);
+
+  useEffect(() => {
+    checkHealth();
+  }, [checkHealth]);
 
   const links = [
     { href: '/', label: 'Overview', icon: ShieldCheck },
@@ -59,12 +66,18 @@ export function Navigation() {
         </nav>
 
         <div className="hidden items-center gap-2 md:flex">
-          <div className="flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1 text-xs border border-slate-800">
+          <button
+            onClick={checkHealth}
+            disabled={checking}
+            title={systemOnline === false ? 'Click to retry connecting to the RateGuard API' : 'RateGuard API connection status'}
+            className="flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1 text-xs border border-slate-800 hover:border-slate-700 disabled:opacity-70"
+          >
             <span className={`h-2 w-2 rounded-full ${systemOnline === true ? 'bg-emerald-500 animate-pulse' : systemOnline === false ? 'bg-rose-500' : 'bg-amber-500'}`} />
             <span className="text-slate-300 font-mono text-xs">
-              {systemOnline === true ? 'API LIVE' : systemOnline === false ? 'API OFFLINE' : 'CHECKING...'}
+              {checking ? 'CHECKING...' : systemOnline === true ? 'API LIVE' : systemOnline === false ? 'API OFFLINE' : 'CHECKING...'}
             </span>
-          </div>
+            {systemOnline === false && <RefreshCw className="h-3 w-3 text-rose-400" />}
+          </button>
         </div>
       </div>
     </header>

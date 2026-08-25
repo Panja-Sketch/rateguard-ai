@@ -1,10 +1,42 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck, ArrowDown, Globe } from 'lucide-react';
+import { fetchSystemInfo } from '@/lib/api/client';
+
+const DEFAULT_MODEL_LABEL = 'Gemini 3.7 Flash';
+const DEFAULT_PROVIDER_LABEL = 'Google Vertex AI';
+const DEFAULT_FRAMEWORK_LABEL = 'Google GenAI SDK';
+const DEFAULT_SUPERVISOR_LABEL = 'Google GenAI SDK Structured-Decision Supervisor';
 
 export default function ArchitecturePage() {
+  // Backend runtime metadata (GET /api/v1/system/info), used where practical
+  // so the displayed model/provider/framework can never drift from what the
+  // deployed backend actually reports. Falls back to the same truthful
+  // static labels on a fetch failure -- this page must never regress to
+  // showing nothing, and never fabricates ADK/multi-agent claims either way.
+  const [modelLabel, setModelLabel] = useState(DEFAULT_MODEL_LABEL);
+  const [providerLabel, setProviderLabel] = useState(DEFAULT_PROVIDER_LABEL);
+  const [frameworkLabel, setFrameworkLabel] = useState(DEFAULT_FRAMEWORK_LABEL);
+  const [supervisorLabel, setSupervisorLabel] = useState(DEFAULT_SUPERVISOR_LABEL);
+
+  useEffect(() => {
+    fetchSystemInfo()
+      .then((info) => {
+        if (info.gemini_model_display) setModelLabel(info.gemini_model_display);
+        if (info.agent_provider) setProviderLabel(info.agent_provider);
+        if (info.agent_framework) setFrameworkLabel(info.agent_framework);
+        if (info.agent_supervisor) setSupervisorLabel(info.agent_supervisor);
+      })
+      .catch(() => {
+        // Backend unreachable: keep the static, equally truthful defaults above.
+      });
+  }, []);
+
   const techStack = [
     {
-      title: 'Google ADK + Gemini 3.7 Flash',
-      category: 'Agent Supervisor',
+      title: `${frameworkLabel} + ${modelLabel}`,
+      category: 'Agentic Supervisor',
       desc: 'Orchestrates adaptive assurance missions, interprets findings, plans probes, synthesizes root causes, and proposes remediation patches.',
       icon: Bot,
       color: 'border-sky-500/50 bg-sky-950/30 text-sky-300',
@@ -69,8 +101,8 @@ export default function ArchitecturePage() {
           <div>FastAPI Backend (Cloud Run API)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ Pub/Sub Async Queue / Native Invocation</div>
           <div>Private Worker Runtime (Cloud Run Worker)</div>
-          <div className="pl-4 text-slate-500 font-sans">↓ Multi-Agent Orchestration</div>
-          <div className="text-purple-300 font-bold">Google ADK Assurance Supervisor $\leftrightarrow$ Gemini 3.7 Flash</div>
+          <div className="pl-4 text-slate-500 font-sans">↓ Agentic Assurance Supervisor</div>
+          <div className="text-purple-300 font-bold">{supervisorLabel} $\leftrightarrow$ {modelLabel} ({providerLabel})</div>
           <div className="pl-4 text-slate-500 font-sans">↕ Deterministic Boundaries</div>
           <div>Python Deterministic Engines (AST Diff, Oracle Math, Test Generator, Reconciliation)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ External Runtime Verification</div>
@@ -88,7 +120,7 @@ export default function ArchitecturePage() {
           <Lock className="h-4 w-4" /> Strict Deterministic Boundary Guarantee
         </div>
         <p className="text-xs text-sky-100 leading-relaxed">
-          Gemini 3.7 Flash and Google ADK plan investigation probes, reason over AST diffs, propose remediation patches, and synthesize executive summaries. All monetary arithmetic, rate table lookups, pricing graph evaluations, test executions, BigQuery SQL aggregations, and financial exposure calculations are executed exclusively by deterministic Python code using Python <code className="font-mono text-white font-bold">Decimal</code>.
+          {modelLabel}, invoked through the {frameworkLabel}, plans investigation probes, reasons over AST diffs, proposes remediation patches, and synthesizes executive summaries. All monetary arithmetic, rate table lookups, pricing graph evaluations, test executions, BigQuery SQL aggregations, and financial exposure calculations are executed exclusively by deterministic Python code using Python <code className="font-mono text-white font-bold">Decimal</code>.
         </p>
       </div>
 

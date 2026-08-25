@@ -97,6 +97,34 @@ $BACKEND_IMAGE = New-CandidateBackendImageReference -Region $REGION -ProjectId $
 $FRONTEND_IMAGE = New-CandidateFrontendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $IMAGE_TAG
 $CANDIDATE_ENV_FILE = "infrastructure/.candidate-env.yaml"
 
+function Get-ProductionCorsOrigins {
+    <# Reads and JSON-parses RATEGUARD_CORS_ORIGINS out of
+    infrastructure/runtime-env.yaml -- the single source of truth for the
+    production CORS allow-list. #>
+    $line = Get-Content infrastructure/runtime-env.yaml | Where-Object { $_ -match "^RATEGUARD_CORS_ORIGINS:\s*" } | Select-Object -First 1
+    if (-not $line) {
+        throw "RATEGUARD_CORS_ORIGINS not found in infrastructure/runtime-env.yaml"
+    }
+    $json = $line -replace "^RATEGUARD_CORS_ORIGINS:\s*'(.*)'\s*$", '$1'
+    # Deliberately assigned to an intermediate variable before being
+    # returned: on Windows PowerShell 5.1, wrapping a ConvertFrom-Json call
+    # directly in @(...) (e.g. `@(ConvertFrom-Json -InputObject $json)`, with
+    # no assignment in between) collapses a JSON array of strings into one
+    # space-joined string instead of a string array.
+    $parsed = ConvertFrom-Json -InputObject $json
+    return $parsed
+}
+
+# The candidate rateguard-web Cloud Run revision is reachable at a
+# tag-prefixed URL ("candidate---..."), a DIFFERENT browser origin from
+# production that must be explicitly allow-listed -- CORSMiddleware never
+# widens an origin to cover a subdomain/prefix automatically. Every
+# production origin is kept unchanged; only the candidate origin is added,
+# never a wildcard. See Get-CandidateCorsOrigins in CandidateDeployLib.ps1.
+$PRODUCTION_CORS_ORIGINS = @(Get-ProductionCorsOrigins)
+$CANDIDATE_CORS_ORIGINS_ARRAY = @(Get-CandidateCorsOrigins -ProductionOrigins $PRODUCTION_CORS_ORIGINS -CandidateTag $CANDIDATE_TAG)
+$CANDIDATE_CORS_ORIGINS = ConvertTo-CompactJsonStringArray -Values $CANDIDATE_CORS_ORIGINS_ARRAY
+
 $EXPECTED_STAGING_ENV = @{
     "RATEGUARD_PUBSUB_TOPIC"              = $STAGING_TOPIC
     "RATEGUARD_PUBSUB_SUBSCRIPTION"       = $STAGING_SUBSCRIPTION
@@ -105,6 +133,7 @@ $EXPECTED_STAGING_ENV = @{
     "RATEGUARD_BIGQUERY_PORTFOLIO_TABLE"  = $STAGING_BIGQUERY_PORTFOLIO_TABLE
     "RATEGUARD_BIGQUERY_RESULTS_TABLE"    = $STAGING_BIGQUERY_RESULTS_TABLE
     "RATEGUARD_GCS_BUCKET"                = $STAGING_GCS_BUCKET
+    "RATEGUARD_CORS_ORIGINS"              = $CANDIDATE_CORS_ORIGINS
 }
 
 function Write-Plan {
@@ -134,6 +163,9 @@ function Write-Plan {
     Write-Host "  Ack deadline:                  ${ACK_DEADLINE_SECONDS}s"
     Write-Host "  Retry backoff:                 ${MIN_RETRY_BACKOFF_SECONDS}s - ${MAX_RETRY_BACKOFF_SECONDS}s"
     Write-Host "  Max delivery attempts:         $MAX_DELIVERY_ATTEMPTS"
+    Write-Host "  RATEGUARD_CORS_ORIGINS=$CANDIDATE_CORS_ORIGINS"
+    Write-Host "  (production origins preserved unchanged; the candidate rateguard-web"
+    Write-Host "   tag-prefixed origin above is ADDED, never a wildcard)"
     Write-Host ""
     Write-Host "Exact commands that -DeployCandidate would run, in order:"
     Write-Host "  1) gcloud builds submit . --config=./backend/cloudbuild.yaml --substitutions=_IMAGE_TAG=$IMAGE_TAG"
@@ -167,7 +199,7 @@ function Write-Plan {
 
 function Write-CandidateEnvFile {
     $lines = Get-Content infrastructure/runtime-env.yaml | Where-Object {
-        $_ -notmatch '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE|RATEGUARD_BIGQUERY_DATASET|RATEGUARD_BIGQUERY_PORTFOLIO_TABLE|RATEGUARD_BIGQUERY_RESULTS_TABLE|RATEGUARD_GCS_BUCKET):'
+        $_ -notmatch '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE|RATEGUARD_BIGQUERY_DATASET|RATEGUARD_BIGQUERY_PORTFOLIO_TABLE|RATEGUARD_BIGQUERY_RESULTS_TABLE|RATEGUARD_GCS_BUCKET|RATEGUARD_CORS_ORIGINS):'
     }
     $lines | Set-Content -Encoding utf8 $CANDIDATE_ENV_FILE
     Add-Content -Encoding utf8 $CANDIDATE_ENV_FILE @"
@@ -184,6 +216,7 @@ RATEGUARD_BIGQUERY_DATASET: "$STAGING_BIGQUERY_DATASET"
 RATEGUARD_BIGQUERY_PORTFOLIO_TABLE: "$STAGING_BIGQUERY_PORTFOLIO_TABLE"
 RATEGUARD_BIGQUERY_RESULTS_TABLE: "$STAGING_BIGQUERY_RESULTS_TABLE"
 RATEGUARD_GCS_BUCKET: "$STAGING_GCS_BUCKET"
+RATEGUARD_CORS_ORIGINS: '$CANDIDATE_CORS_ORIGINS'
 "@
 }
 

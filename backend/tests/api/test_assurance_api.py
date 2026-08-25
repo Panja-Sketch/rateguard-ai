@@ -111,8 +111,11 @@ def test_06_system_info() -> None:
     assert res.status_code == 200
     data = res.json()
     assert data["gemini_model"] == "gemini-3.7-flash"
-    assert data["agent_framework"] == "Google ADK"
+    assert data["agent_framework"] == "Google GenAI SDK"
+    assert data["agent_provider"] == "Google Vertex AI"
+    assert data["agent_supervisor"] == "Google GenAI SDK Structured-Decision Supervisor"
     assert data["ipir_version"] == "0.1"
+    assert "ADK" not in data["agent_framework"]
 
 
 def test_07_demo_scenarios_catalog() -> None:

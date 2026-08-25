@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiError, createAssuranceMission, testRatingApiConnector } from '@/lib/api/client';
+import { ApiError, createAssuranceMission, describeFetchError, testRatingApiConnector } from '@/lib/api/client';
 import { ComparisonMode, RuntimeConnectorConfig, ValidationIssue } from '@/lib/types/assurance';
 import {
   Play,
@@ -107,8 +107,7 @@ export default function NewMissionPage() {
       const res = await testRatingApiConnector(config as unknown as Record<string, unknown>);
       setConnectorTestResult({ status: 'SUCCESS', premium: res.parsed_premium });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(`Connector Test Failed: ${msg}`);
+      setError(`Connector Test Failed: ${describeFetchError(err, 'No connection was made.')}`);
     } finally {
       setTestingConn(false);
     }
@@ -120,7 +119,15 @@ export default function NewMissionPage() {
   // is a demo sample only when the user explicitly checked "use demo endpoint" below.
   const isDemoSampleMission = mode !== 'RUNTIME_VERIFICATION' || useDemoRatingEndpoint;
 
+  // Guards against a double submission racing ahead of React's re-render of
+  // the button's `disabled={loading}` prop (e.g. a fast double-click before
+  // the first click's setLoading(true) has painted) — a ref is synchronous,
+  // unlike state, so the second call is rejected immediately.
+  const submitInFlightRef = useRef(false);
+
   const handleStartMission = async () => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setLoading(true);
     setError(null);
     setFieldIssues([]);
@@ -175,9 +182,9 @@ export default function NewMissionPage() {
         setFieldIssues(err.issues);
         setError(null);
       } else {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
+        setError(describeFetchError(err, 'No mission was created.'));
       }
+      submitInFlightRef.current = false;
       setLoading(false);
     }
   };

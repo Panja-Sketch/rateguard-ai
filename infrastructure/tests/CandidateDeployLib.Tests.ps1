@@ -240,6 +240,49 @@ Describe "Test-CandidateEnvIsolation" {
     }
 }
 
+Describe "Get-CandidateCorsOrigins" {
+
+    It "adds a tag-prefixed candidate origin alongside the unchanged production origin" {
+        $result = @(Get-CandidateCorsOrigins -ProductionOrigins @("http://localhost:3000", "https://rateguard-web-iqofutwtva-uc.a.run.app") -CandidateTag "candidate")
+        $result.Count | Should Be 3
+        ($result -contains "http://localhost:3000") | Should Be $true
+        ($result -contains "https://rateguard-web-iqofutwtva-uc.a.run.app") | Should Be $true
+        ($result -contains "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app") | Should Be $true
+    }
+
+    It "never generates a candidate origin for localhost or loopback" {
+        $result = @(Get-CandidateCorsOrigins -ProductionOrigins @("http://localhost:3000", "http://127.0.0.1:3000") -CandidateTag "candidate")
+        $result.Count | Should Be 2
+    }
+
+    It "never emits a wildcard origin" {
+        $result = @(Get-CandidateCorsOrigins -ProductionOrigins @("https://rateguard-web-iqofutwtva-uc.a.run.app") -CandidateTag "candidate")
+        ($result -contains "*") | Should Be $false
+    }
+
+    It "does not add a duplicate candidate origin when the same production origin appears twice" {
+        $result = @(Get-CandidateCorsOrigins -ProductionOrigins @("https://rateguard-web-iqofutwtva-uc.a.run.app", "https://rateguard-web-iqofutwtva-uc.a.run.app") -CandidateTag "candidate")
+        (@($result | Where-Object { $_ -eq "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" })).Count | Should Be 1
+    }
+}
+
+Describe "ConvertTo-CompactJsonStringArray" {
+
+    It "round-trips through ConvertFrom-Json back to the same values" {
+        $values = @("http://localhost:3000", "https://rateguard-web-iqofutwtva-uc.a.run.app", "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app")
+        $json = ConvertTo-CompactJsonStringArray -Values $values
+        $json | Should Be '["http://localhost:3000","https://rateguard-web-iqofutwtva-uc.a.run.app","https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"]'
+        $parsedRaw = ConvertFrom-Json -InputObject $json
+        $parsed = @($parsedRaw)
+        $parsed.Count | Should Be 3
+    }
+
+    It "produces a valid array literal for a single-element input (the PS 5.1 single-element pitfall)" {
+        $json = ConvertTo-CompactJsonStringArray -Values @("https://rateguard-web-iqofutwtva-uc.a.run.app")
+        $json | Should Be '["https://rateguard-web-iqofutwtva-uc.a.run.app"]'
+    }
+}
+
 Describe "Invoke-NativeCommand fail-fast" {
 
     It "returns normally and captures output on a zero exit code" {

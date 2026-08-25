@@ -99,6 +99,26 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 30.0
             return e.code, {"raw": raw}
 
 
+def _http_with_origin(
+    method: str, url: str, origin: str, extra_headers: dict | None = None, timeout: float = 15.0
+) -> tuple[int, dict]:
+    """Like _http, but sends a browser-shaped Origin header and returns
+    response HEADERS instead of the parsed body -- this is the piece plain
+    CLI/urllib acceptance checks never exercised: a client that never sends
+    Origin never observes CORSMiddleware reject a request, so a candidate
+    deployment could pass every other check here while every real browser
+    request from the candidate frontend was silently blocked."""
+    headers = {"Origin": origin}
+    if extra_headers:
+        headers.update(extra_headers)
+    req = urllib.request.Request(url, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers)
+
+
 def check_health_live(report: Report, api_url: str) -> None:
     status_code, body = _http("GET", f"{api_url}/health/live")
     ok = status_code == 200 and body.get("status") == "healthy"
@@ -155,6 +175,47 @@ def check_system_status(report: Report, api_url: str) -> None:
         f"HTTP {status_code}, model_ok={model_ok}, provider_ok={provider_ok}, framework_ok={framework_ok}, "
         f"auth_mode_ok={auth_mode_ok}, location_ok={location_ok}, endpoint_probe_invoked_false={probe_not_invoked}, "
         f"no_secret_markers={no_secrets}",
+    )
+
+
+def check_cors_from_candidate_web_origin(report: Report, api_url: str, frontend_url: str) -> None:
+    """Verifies the candidate API grants CORS access to the candidate WEB
+    origin specifically -- not merely that the API answers HTTP requests.
+    A plain GET/POST from this script always "succeeds" at the transport
+    level even when CORSMiddleware would reject every real browser request
+    from the candidate frontend, because urllib never sends an Origin header
+    and never inspects response headers. This check does both: a simple GET
+    with Origin set to the candidate frontend's own origin, and an OPTIONS
+    preflight for a real mission-creation POST, exactly as a browser would
+    send it before the candidate frontend's first API call."""
+    origin = frontend_url.rstrip("/")
+
+    get_status, get_headers = _http_with_origin("GET", f"{api_url}/health/live", origin)
+    get_ok = get_status == 200 and get_headers.get("Access-Control-Allow-Origin") == origin
+
+    preflight_status, preflight_headers = _http_with_origin(
+        "OPTIONS",
+        f"{api_url}/api/v1/missions",
+        origin,
+        extra_headers={
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    preflight_ok = (
+        preflight_status == 200
+        and preflight_headers.get("Access-Control-Allow-Origin") == origin
+        and "POST" in (preflight_headers.get("Access-Control-Allow-Methods") or "")
+    )
+
+    ok = get_ok and preflight_ok
+    report.add(
+        "cors_allows_candidate_web_origin", ok,
+        f"origin={origin}, GET /health/live: HTTP {get_status} "
+        f"allow-origin={get_headers.get('Access-Control-Allow-Origin')!r}; "
+        f"OPTIONS preflight on /api/v1/missions: HTTP {preflight_status} "
+        f"allow-origin={preflight_headers.get('Access-Control-Allow-Origin')!r} "
+        f"allow-methods={preflight_headers.get('Access-Control-Allow-Methods')!r}",
     )
 
 
@@ -418,6 +479,15 @@ def main(argv: list[str] | None = None) -> int:
     check_health_live(report, args.api_url)
     check_health_ready(report, args.api_url)
     check_system_status(report, args.api_url)
+    if args.frontend_url:
+        check_cors_from_candidate_web_origin(report, args.api_url, args.frontend_url)
+    else:
+        report.add(
+            "cors_allows_candidate_web_origin", False,
+            "Skipped: --frontend-url was not provided, so the candidate web origin's CORS "
+            "access could not be verified (health/mission checks below use a plain HTTP "
+            "client and never send an Origin header, so they cannot catch this).",
+        )
 
     mission_id = create_demo_mission(report, args.api_url)
     mission_detail = None

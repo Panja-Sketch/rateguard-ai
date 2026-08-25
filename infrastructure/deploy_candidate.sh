@@ -65,6 +65,52 @@ FRONTEND_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/rateguard/rateguard-web:$
 
 CANDIDATE_ENV_FILE="infrastructure/.candidate-env.yaml"
 
+# Derives the candidate API's CORS allow-list from the production origins
+# already declared in infrastructure/runtime-env.yaml's
+# RATEGUARD_CORS_ORIGINS: every production origin is kept unchanged (never
+# replaced, never wildcarded), and one candidate origin is added per
+# non-localhost production origin by inserting the Cloud Run traffic-tag
+# prefix ("<tag>---") ahead of the host -- exactly how Cloud Run forms a
+# --tag candidate's own URL from the service's base URL (e.g.
+# "https://rateguard-web-iqofutwtva-uc.a.run.app" ->
+# "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"). Pure/local:
+# reads one file and does one JSON transform, no gcloud/network call. Without
+# this, the candidate rateguard-web origin is never allow-listed and every
+# browser request from the candidate frontend is silently blocked by
+# CORSMiddleware, even though a plain CLI/urllib client (which never sends an
+# Origin header) sees no failure at all.
+get_candidate_cors_origins() {
+  local prod_cors_line
+  prod_cors_line=$(grep -E '^RATEGUARD_CORS_ORIGINS:' infrastructure/runtime-env.yaml || true)
+  if [ -z "$prod_cors_line" ]; then
+    echo "Error: RATEGUARD_CORS_ORIGINS not found in infrastructure/runtime-env.yaml" >&2
+    exit 1
+  fi
+  local prod_cors_json="${prod_cors_line#RATEGUARD_CORS_ORIGINS: }"
+  prod_cors_json="${prod_cors_json%\'}"
+  prod_cors_json="${prod_cors_json#\'}"
+  python - "$prod_cors_json" "$CANDIDATE_TAG" <<'PYEOF'
+import json
+import sys
+
+origins = json.loads(sys.argv[1])
+tag = sys.argv[2]
+result = list(origins)
+for origin in origins:
+    if "://" not in origin:
+        continue
+    scheme, host = origin.split("://", 1)
+    if host.startswith("localhost") or host.startswith("127."):
+        continue
+    candidate_origin = f"{scheme}://{tag}---{host}"
+    if candidate_origin not in result:
+        result.append(candidate_origin)
+print(json.dumps(result))
+PYEOF
+}
+
+CANDIDATE_CORS_ORIGINS="$(get_candidate_cors_origins)"
+
 DEPLOY_CANDIDATE=false
 for arg in "$@"; do
   case "$arg" in
@@ -121,8 +167,11 @@ Candidate env vars (non-secret; no API key is ever set):
   RATEGUARD_BIGQUERY_PORTFOLIO_TABLE=${STAGING_BIGQUERY_PORTFOLIO_TABLE}
   RATEGUARD_BIGQUERY_RESULTS_TABLE=${STAGING_BIGQUERY_RESULTS_TABLE}
   RATEGUARD_GCS_BUCKET=${STAGING_GCS_BUCKET}
+  RATEGUARD_CORS_ORIGINS=${CANDIDATE_CORS_ORIGINS}
+  (production origins preserved unchanged; the candidate rateguard-web
+   tag-prefixed origin above is ADDED, never a wildcard)
   (all other values inherited from infrastructure/runtime-env.yaml: project,
-   region, Firestore database id, BigQuery enabled/location, CORS)
+   region, Firestore database id, BigQuery enabled/location)
 
 Exact commands that --deploy-candidate would run, in order:
 
@@ -205,7 +254,7 @@ write_candidate_env_file() {
   cp infrastructure/runtime-env.yaml "$CANDIDATE_ENV_FILE"
   # Remove production-only keys so the staging overrides below are
   # unambiguous (avoids two conflicting values for the same key in one file).
-  grep -v -E '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE|RATEGUARD_BIGQUERY_DATASET|RATEGUARD_BIGQUERY_PORTFOLIO_TABLE|RATEGUARD_BIGQUERY_RESULTS_TABLE|RATEGUARD_GCS_BUCKET):' \
+  grep -v -E '^(RATEGUARD_PUBSUB_TOPIC|RATEGUARD_PUBSUB_SUBSCRIPTION|RATEGUARD_FIRESTORE_COLLECTION|RATEGUARD_AGENT_ENABLED|GOOGLE_GENAI_USE_VERTEXAI|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|RATEGUARD_GEMINI_MODEL|RATEGUARD_RUN_STORE|RATEGUARD_BIGQUERY_DATASET|RATEGUARD_BIGQUERY_PORTFOLIO_TABLE|RATEGUARD_BIGQUERY_RESULTS_TABLE|RATEGUARD_GCS_BUCKET|RATEGUARD_CORS_ORIGINS):' \
     infrastructure/runtime-env.yaml > "$CANDIDATE_ENV_FILE"
   cat >> "$CANDIDATE_ENV_FILE" <<ENV
 RATEGUARD_AGENT_ENABLED: "true"
@@ -221,6 +270,7 @@ RATEGUARD_BIGQUERY_DATASET: "${STAGING_BIGQUERY_DATASET}"
 RATEGUARD_BIGQUERY_PORTFOLIO_TABLE: "${STAGING_BIGQUERY_PORTFOLIO_TABLE}"
 RATEGUARD_BIGQUERY_RESULTS_TABLE: "${STAGING_BIGQUERY_RESULTS_TABLE}"
 RATEGUARD_GCS_BUCKET: "${STAGING_GCS_BUCKET}"
+RATEGUARD_CORS_ORIGINS: '${CANDIDATE_CORS_ORIGINS}'
 ENV
 }
 
