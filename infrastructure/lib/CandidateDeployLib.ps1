@@ -232,6 +232,39 @@ function Test-ImageReferenceNoSpaces {
     return ($ImageReference -notmatch '\s')
 }
 
+function Test-CandidateImageTagFormat {
+    <#
+    Strict format for an EXISTING candidate application image tag supplied
+    to -ResumeCandidate: candidate-<12 lowercase hex chars>, matching
+    exactly what `git rev-parse --short=12` + the "candidate-" prefix
+    produces. Deliberately strict -- this tag selects which already-built
+    image gets treated as authoritative during resume, so a loosely
+    validated value could let an arbitrary/unbuilt image reference bypass
+    the image-existence and revision-parity checks entirely.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Tag)
+    if ([string]::IsNullOrWhiteSpace($Tag)) { return $false }
+    return ($Tag -cmatch '^candidate-[0-9a-f]{12}$')
+}
+
+function New-CandidateBackendImageReference {
+    param(
+        [Parameter(Mandatory = $true)][string]$Region,
+        [Parameter(Mandatory = $true)][string]$ProjectId,
+        [Parameter(Mandatory = $true)][string]$ImageTag
+    )
+    return "$Region-docker.pkg.dev/$ProjectId/rateguard/rateguard-api:$ImageTag"
+}
+
+function New-CandidateFrontendImageReference {
+    param(
+        [Parameter(Mandatory = $true)][string]$Region,
+        [Parameter(Mandatory = $true)][string]$ProjectId,
+        [Parameter(Mandatory = $true)][string]$ImageTag
+    )
+    return "$Region-docker.pkg.dev/$ProjectId/rateguard/rateguard-web:$ImageTag"
+}
+
 function Test-CandidateEnvIsolation {
     <#
     Compares a service's container env array against the expected staging

@@ -163,6 +163,47 @@ Describe "Frontend Cloud Build substitutions" {
     }
 }
 
+Describe "Test-CandidateImageTagFormat" {
+
+    It "accepts a well-formed candidate image tag" {
+        Test-CandidateImageTagFormat -Tag "candidate-23cfc95b5949" | Should Be $true
+    }
+
+    It "rejects an empty or null tag" {
+        Test-CandidateImageTagFormat -Tag "" | Should Be $false
+        Test-CandidateImageTagFormat -Tag $null | Should Be $false
+    }
+
+    It "rejects a tag missing the candidate- prefix" {
+        Test-CandidateImageTagFormat -Tag "23cfc95b5949" | Should Be $false
+    }
+
+    It "rejects a tag with too few or too many hex characters" {
+        Test-CandidateImageTagFormat -Tag "candidate-23cfc95b594" | Should Be $false
+        Test-CandidateImageTagFormat -Tag "candidate-23cfc95b59499" | Should Be $false
+    }
+
+    It "rejects a tag with uppercase or non-hex characters" {
+        Test-CandidateImageTagFormat -Tag "candidate-23CFC95B5949" | Should Be $false
+        Test-CandidateImageTagFormat -Tag "candidate-23cfc95b594g" | Should Be $false
+    }
+
+    It "rejects an arbitrary/unrelated string masquerading as a tag" {
+        Test-CandidateImageTagFormat -Tag "latest" | Should Be $false
+        Test-CandidateImageTagFormat -Tag "candidate-DIFFERENT_SHA" | Should Be $false
+    }
+}
+
+Describe "New-CandidateBackendImageReference / New-CandidateFrontendImageReference" {
+
+    It "build the expected backend and frontend image references from a tag" {
+        $backend = New-CandidateBackendImageReference -Region "us-central1" -ProjectId "rateguard-ai" -ImageTag "candidate-23cfc95b5949"
+        $frontend = New-CandidateFrontendImageReference -Region "us-central1" -ProjectId "rateguard-ai" -ImageTag "candidate-23cfc95b5949"
+        $backend | Should Be "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-api:candidate-23cfc95b5949"
+        $frontend | Should Be "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-web:candidate-23cfc95b5949"
+    }
+}
+
 Describe "Test-ProductionTrafficUnchanged" {
 
     It "passes when the candidate tag carries 0% traffic" {
@@ -260,7 +301,12 @@ Describe "deploy_candidate.ps1 orchestration" {
             WorkerUntaggedUrl = "https://rateguard-worker-iqofutwtva-uc.a.run.app"
         }
 
-        { Complete-CandidateDeployment -Urls $urls -WebUrl "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" } | Should Throw
+        {
+            Complete-CandidateDeployment -Urls $urls -WebUrl "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" `
+                -ExpectedBackendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-api:candidate-23cfc95b5949" `
+                -ExpectedFrontendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-web:candidate-23cfc95b5949" `
+                -ImageTag "candidate-23cfc95b5949"
+        } | Should Throw
 
         $global:__banner_printed | Should Be $false
         Remove-Variable -Name __banner_printed -Scope Global -ErrorAction SilentlyContinue
@@ -277,12 +323,50 @@ Describe "deploy_candidate.ps1 orchestration" {
             WorkerUntaggedUrl = "https://rateguard-worker-iqofutwtva-uc.a.run.app"
         }
 
-        { Complete-CandidateDeployment -Urls $urls -WebUrl "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" } | Should Not Throw
+        {
+            Complete-CandidateDeployment -Urls $urls -WebUrl "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" `
+                -ExpectedBackendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-api:candidate-23cfc95b5949" `
+                -ExpectedFrontendImage "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-web:candidate-23cfc95b5949" `
+                -ImageTag "candidate-23cfc95b5949"
+        } | Should Not Throw
         $global:__banner_printed | Should Be $true
         Remove-Variable -Name __banner_printed -Scope Global -ErrorAction SilentlyContinue
     }
 
+    It "resume requires -CandidateImageTag (rejected at the CLI-argument gate before any resume logic runs)" {
+        { Assert-ValidResumeArguments -ResumeCandidate -CandidateImageTag "" } | Should Throw "required"
+        { Assert-ValidResumeArguments -ResumeCandidate } | Should Throw "required"
+        { Assert-ValidResumeArguments -ResumeCandidate -CandidateImageTag $null } | Should Throw "required"
+    }
+
+    It "Resume-Candidate itself also declares -CandidateImageTag as Mandatory (defense in depth, not just the CLI gate)" {
+        $param = (Get-Command Resume-Candidate).Parameters['CandidateImageTag']
+        $mandatoryAttr = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }
+        $mandatoryAttr.Mandatory | Should Be $true
+    }
+
+    It "a malformed -CandidateImageTag is rejected before any Artifact Registry or revision check runs" {
+        Mock Invoke-NativeCommand { throw "Invoke-NativeCommand should not have been called for a malformed tag" }
+        Mock Get-ValidatedCandidateBackendUrls { throw "Get-ValidatedCandidateBackendUrls should not have been called for a malformed tag" }
+
+        { Resume-Candidate -CandidateImageTag "not-a-valid-tag" } | Should Throw "not a valid candidate image tag"
+    }
+
+    It "a missing Artifact Registry image is rejected" {
+        Mock Invoke-NativeCommand {
+            param($Operation, $FilePath, $ArgumentList, [switch]$CaptureOutput)
+            if ($ArgumentList -contains "artifacts") {
+                throw "Native command failed: Describe supplied candidate backend image (exit code 1)"
+            }
+            return @()
+        }
+        Mock Get-ValidatedCandidateBackendUrls { throw "should not reach URL discovery when the image itself cannot be verified" }
+
+        { Resume-Candidate -CandidateImageTag "candidate-23cfc95b5949" } | Should Throw
+    }
+
     It "-ResumeCandidate stops on a backend image mismatch instead of silently rebuilding" {
+        Mock Invoke-NativeCommand { return @("sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef") }
         Mock Get-ValidatedCandidateBackendUrls {
             $apiInfo = New-ApiServiceInfoWithCandidateTag
             $apiInfo.spec.template.spec.containers[0].image = "us-central1-docker.pkg.dev/rateguard-ai/rateguard/rateguard-api:candidate-DIFFERENT_SHA"
@@ -297,21 +381,37 @@ Describe "deploy_candidate.ps1 orchestration" {
                 WorkerUntaggedUrl = "https://rateguard-worker-iqofutwtva-uc.a.run.app"
             }
         }
-        Mock Invoke-NativeCommand { }
 
-        { Resume-Candidate } | Should Throw "Mismatch"
+        { Resume-Candidate -CandidateImageTag "candidate-23cfc95b5949" } | Should Throw "Mismatch"
     }
 
-    It "-ResumeCandidate skips backend rebuild and frontend redeploy when everything already matches" {
-        # Build the API/worker fixtures against whatever $BACKEND_IMAGE the
-        # dot-sourced script actually computed for the current git HEAD
-        # (rather than a hardcoded value), so this test is independent of
-        # which commit it happens to run against.
+    It "clean -DeployCandidate still derives its image tag from the current git HEAD" {
+        # $GIT_SHA/$IMAGE_TAG/$BACKEND_IMAGE are computed unconditionally at
+        # script load time from `git rev-parse HEAD`, independent of which
+        # switch (if any) is passed -- this is what -DeployCandidate uses.
+        # Resume-Candidate must NOT read these globals (verified by the
+        # tests above, which pass an unrelated -CandidateImageTag and never
+        # reference $BACKEND_IMAGE).
+        $IMAGE_TAG | Should Be "candidate-$GIT_SHA"
+        $expectedBackendImage = New-CandidateBackendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $IMAGE_TAG
+        $BACKEND_IMAGE | Should Be $expectedBackendImage
+    }
+
+    It "-ResumeCandidate accepts a valid prior application tag even when current git HEAD differs, and skips backend rebuild + frontend redeploy when everything already matches" {
+        # Deliberately use a tag that is NOT the current git HEAD's tag (this
+        # test's dot-sourced $GIT_SHA is whatever this repo's HEAD actually
+        # is, e.g. the deployment-script-only commit bde7927 -- the supplied
+        # tag below intentionally does not need to equal it).
+        $suppliedTag = "candidate-23cfc95b5949"
+        $suppliedTag | Should Not Be $IMAGE_TAG
+
+        $expectedBackendImage = New-CandidateBackendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $suppliedTag
+
         Mock Get-ValidatedCandidateBackendUrls {
             $apiInfo = New-ApiServiceInfoWithCandidateTag
-            $apiInfo.spec.template.spec.containers[0].image = $BACKEND_IMAGE
+            $apiInfo.spec.template.spec.containers[0].image = $expectedBackendImage
             $workerInfo = New-WorkerServiceInfoWithCandidateTag
-            $workerInfo.spec.template.spec.containers[0].image = $BACKEND_IMAGE
+            $workerInfo.spec.template.spec.containers[0].image = $expectedBackendImage
             [pscustomobject]@{
                 ApiInfo           = $apiInfo
                 WorkerInfo        = $workerInfo
@@ -331,14 +431,49 @@ Describe "deploy_candidate.ps1 orchestration" {
         Mock Deploy-CandidateFrontend { $global:__frontend_deployed = $true; return "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" }
         Mock Confirm-CandidatePostconditions { return @() }
         Mock Write-SuccessBanner { }
-        Mock Invoke-NativeCommand { }
+        Mock Invoke-NativeCommand { return @("sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef") }
         $global:__frontend_deployed = $false
 
-        { Resume-Candidate } | Should Not Throw
+        { Resume-Candidate -CandidateImageTag $suppliedTag } | Should Not Throw
 
         # The candidate web tag already exists in the fixture returned by the
         # mocked Get-CandidateServiceInfo, so the frontend must NOT be rebuilt.
         $global:__frontend_deployed | Should Be $false
         Remove-Variable -Name __frontend_deployed -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "frontend resume uses the supplied existing candidate tag for the frontend image, not the HEAD-derived tag" {
+        $suppliedTag = "candidate-23cfc95b5949"
+        $expectedBackendImage = New-CandidateBackendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $suppliedTag
+        $expectedFrontendImage = New-CandidateFrontendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $suppliedTag
+
+        Mock Get-ValidatedCandidateBackendUrls {
+            $apiInfo = New-ApiServiceInfoWithCandidateTag
+            $apiInfo.spec.template.spec.containers[0].image = $expectedBackendImage
+            $workerInfo = New-WorkerServiceInfoWithCandidateTag
+            $workerInfo.spec.template.spec.containers[0].image = $expectedBackendImage
+            [pscustomobject]@{
+                ApiInfo           = $apiInfo
+                WorkerInfo        = $workerInfo
+                ApiTaggedUrl      = "https://candidate---rateguard-api-iqofutwtva-uc.a.run.app"
+                WorkerTaggedUrl   = "https://candidate---rateguard-worker-iqofutwtva-uc.a.run.app"
+                ApiUntaggedUrl    = "https://rateguard-api-iqofutwtva-uc.a.run.app"
+                WorkerUntaggedUrl = "https://rateguard-worker-iqofutwtva-uc.a.run.app"
+            }
+        }
+        Mock Invoke-NativeCommand { return @("sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef") }
+        Mock Initialize-StagingPubSub { }
+        Mock Initialize-StagingDataResources { }
+        # No candidate tag yet on rateguard-web -- the frontend must be built.
+        Mock Get-CandidateServiceInfo { New-WebServiceInfoNoCandidateTag }
+        Mock Deploy-CandidateFrontend { return "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app" }
+        Mock Confirm-CandidatePostconditions { return @() }
+        Mock Write-SuccessBanner { }
+
+        Resume-Candidate -CandidateImageTag $suppliedTag
+
+        Assert-MockCalled Deploy-CandidateFrontend -Times 1 -Exactly -ParameterFilter {
+            $ImageTag -eq $suppliedTag -and $FrontendImage -eq $expectedFrontendImage
+        }
     }
 }

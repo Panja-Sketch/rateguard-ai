@@ -6,16 +6,29 @@
 # traffic or the production Pub/Sub push config. See deploy_candidate.sh for
 # the full command-by-command rationale -- this file mirrors it.
 #
-# -DeployCandidate builds and deploys every candidate resource from scratch.
+# -DeployCandidate builds and deploys every candidate resource from scratch;
+# its image tag is always derived from the current git HEAD.
+#
 # -ResumeCandidate is for continuing a partially-completed candidate
-# deployment: it discovers and verifies what already exists, skips backend
-# rebuild/redeploy when the deployed image matches the current git commit,
-# and provisions only what is still missing. The two switches are mutually
-# exclusive.
+# deployment: it discovers and verifies what already exists and provisions
+# only what is still missing. It NEVER derives the existing candidate
+# application image tag from the current git HEAD -- HEAD may have moved on
+# to later commits that touch only these deployment scripts (infrastructure
+# changes), while the candidate application image on Cloud Run/Artifact
+# Registry still corresponds to an earlier commit. -ResumeCandidate therefore
+# REQUIRES -CandidateImageTag, naming the exact already-built image
+# (candidate-<12-hex-char-short-sha>) to treat as authoritative; that tag is
+# validated, checked against Artifact Registry, and cross-checked against
+# both the candidate API and candidate worker revisions before anything else
+# proceeds. The current git HEAD is still recorded in resume output, purely
+# for deployment-script traceability -- never used to resolve the image.
+#
+# The two switches are mutually exclusive.
 
 param(
     [switch]$DeployCandidate,
-    [switch]$ResumeCandidate
+    [switch]$ResumeCandidate,
+    [string]$CandidateImageTag
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +39,21 @@ function Assert-MutuallyExclusiveModes {
     param([switch]$DeployCandidate, [switch]$ResumeCandidate)
     if ($DeployCandidate -and $ResumeCandidate) {
         throw "-DeployCandidate and -ResumeCandidate are mutually exclusive. Pass exactly one."
+    }
+}
+
+function Assert-ValidResumeArguments {
+    # -CandidateImageTag is required for -ResumeCandidate and is never
+    # inferred from git HEAD (see header comment). Format-validated here so
+    # an arbitrary/malformed value cannot reach the Artifact Registry
+    # existence check or the revision-parity check at all.
+    param([switch]$ResumeCandidate, [string]$CandidateImageTag)
+    if (-not $ResumeCandidate) { return }
+    if ([string]::IsNullOrWhiteSpace($CandidateImageTag)) {
+        throw "-CandidateImageTag is required when using -ResumeCandidate (e.g. -CandidateImageTag candidate-23cfc95b5949). The existing candidate application image tag is never inferred from the current git HEAD, since HEAD may have moved on to a deployment-script-only commit."
+    }
+    if (-not (Test-CandidateImageTagFormat -Tag $CandidateImageTag)) {
+        throw "-CandidateImageTag '$CandidateImageTag' is not a valid candidate image tag. Expected format: candidate-[0-9a-f]{12}"
     }
 }
 
@@ -60,9 +88,13 @@ try {
 } catch {
     $GIT_SHA = "UNKNOWN_SHA"
 }
+# HEAD-derived image identity -- used by -DeployCandidate (a clean deploy
+# always builds and tags the current commit) and by the dry-run plan. Never
+# used by -ResumeCandidate, which instead uses the explicitly supplied
+# -CandidateImageTag (see Resume-Candidate below).
 $IMAGE_TAG = "candidate-$GIT_SHA"
-$BACKEND_IMAGE = "$REGION-docker.pkg.dev/$PROJECT_ID/rateguard/rateguard-api:$IMAGE_TAG"
-$FRONTEND_IMAGE = "$REGION-docker.pkg.dev/$PROJECT_ID/rateguard/rateguard-web:$IMAGE_TAG"
+$BACKEND_IMAGE = New-CandidateBackendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $IMAGE_TAG
+$FRONTEND_IMAGE = New-CandidateFrontendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $IMAGE_TAG
 $CANDIDATE_ENV_FILE = "infrastructure/.candidate-env.yaml"
 
 $EXPECTED_STAGING_ENV = @{
@@ -115,10 +147,15 @@ function Write-Plan {
     Write-Host "     gcloud run deploy rateguard-web --no-traffic --tag $CANDIDATE_TAG"
     Write-Host "  7) Full postcondition verification before the success banner is ever printed."
     Write-Host ""
-    Write-Host "-ResumeCandidate additionally: discovers/verifies existing backend"
-    Write-Host "image+revisions+URLs, skips backend/API/worker rebuild when the deployed"
-    Write-Host "image already matches this git commit, and provisions only whatever"
-    Write-Host "staging Pub/Sub/BigQuery/GCS/frontend resources are still missing."
+    Write-Host "-ResumeCandidate REQUIRES -CandidateImageTag candidate-<12-hex-char-sha>,"
+    Write-Host "naming the already-built candidate application image explicitly. It is"
+    Write-Host "never inferred from the current git HEAD -- HEAD may have moved on to a"
+    Write-Host "deployment-script-only commit since that image was built. The supplied tag"
+    Write-Host "is validated, checked against Artifact Registry, and cross-checked against"
+    Write-Host "both the candidate API and candidate worker revisions before anything else"
+    Write-Host "proceeds; -ResumeCandidate then skips backend/API/worker rebuild entirely"
+    Write-Host "and provisions only whatever staging Pub/Sub/BigQuery/GCS/frontend resources"
+    Write-Host "are still missing, using that same tag for the candidate frontend image too."
     Write-Host ""
     Write-Host "NOT done by this script, ever: no production traffic change, no change"
     Write-Host "to the production Pub/Sub push config, no write to the production BigQuery"
@@ -316,12 +353,22 @@ function Deploy-CandidateFrontend {
     # --substitutions argument (never a space-separated array, never
     # concatenated into the image name), and verifies the built image
     # actually exists in Artifact Registry before attempting to deploy it.
-    param([Parameter(Mandatory = $true)][string]$CandidateApiUrl)
+    #
+    # ImageTag/FrontendImage are always passed explicitly by the caller
+    # (never read from a script-global) so the same function serves both
+    # -DeployCandidate (HEAD-derived tag) and -ResumeCandidate (the
+    # explicitly supplied -CandidateImageTag) without either path silently
+    # picking up the wrong one.
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidateApiUrl,
+        [Parameter(Mandatory = $true)][string]$ImageTag,
+        [Parameter(Mandatory = $true)][string]$FrontendImage
+    )
 
-    if (-not (Test-ImageReferenceNoSpaces -ImageReference $FRONTEND_IMAGE)) {
-        throw "Frontend image reference contains whitespace: '$FRONTEND_IMAGE'"
+    if (-not (Test-ImageReferenceNoSpaces -ImageReference $FrontendImage)) {
+        throw "Frontend image reference contains whitespace: '$FrontendImage'"
     }
-    $substitutions = New-FrontendSubstitutionsArg -ImageTag $IMAGE_TAG -CandidateApiUrl $CandidateApiUrl
+    $substitutions = New-FrontendSubstitutionsArg -ImageTag $ImageTag -CandidateApiUrl $CandidateApiUrl
 
     Invoke-NativeCommand -Operation "Frontend Cloud Build" -FilePath "gcloud" -ArgumentList @(
         "builds", "submit", "./frontend",
@@ -330,12 +377,12 @@ function Deploy-CandidateFrontend {
     )
 
     Invoke-NativeCommand -Operation "Verify candidate frontend image exists" -FilePath "gcloud" -ArgumentList @(
-        "artifacts", "docker", "images", "describe", $FRONTEND_IMAGE, "--format", "value(image_summary.digest)"
+        "artifacts", "docker", "images", "describe", $FrontendImage, "--format", "value(image_summary.digest)"
     ) | Out-Null
 
     Invoke-NativeCommand -Operation "rateguard-web candidate deployment" -FilePath "gcloud" -ArgumentList @(
         "run", "deploy", "rateguard-web",
-        "--image", $FRONTEND_IMAGE, "--region", $REGION, "--platform", "managed",
+        "--image", $FrontendImage, "--region", $REGION, "--platform", "managed",
         "--no-traffic", "--tag", $CANDIDATE_TAG, "--allow-unauthenticated"
     )
 
@@ -352,7 +399,17 @@ function Confirm-CandidatePostconditions {
     # printed. Returns an array of failure reasons (empty = all satisfied).
     # Never throws on a missing resource -- collects every failure so the
     # caller can report a complete, concise picture in one pass.
-    param([Parameter(Mandatory = $true)][string]$WorkerTaggedUrl, [Parameter(Mandatory = $true)][string]$WorkerUntaggedUrl)
+    #
+    # ExpectedBackendImage/ExpectedFrontendImage are always passed
+    # explicitly: for -DeployCandidate they are the HEAD-derived images, for
+    # -ResumeCandidate they are built from the explicitly supplied
+    # -CandidateImageTag. Never read from a script-global here.
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkerTaggedUrl,
+        [Parameter(Mandatory = $true)][string]$WorkerUntaggedUrl,
+        [Parameter(Mandatory = $true)][string]$ExpectedBackendImage,
+        [Parameter(Mandatory = $true)][string]$ExpectedFrontendImage
+    )
 
     $failures = @()
 
@@ -372,7 +429,7 @@ function Confirm-CandidatePostconditions {
             $failures += "rateguard-api production traffic allocation changed"
         }
         $apiImage = Get-DeployedImageReference -ServiceInfo $apiInfo
-        if ($apiImage -ne $BACKEND_IMAGE) { $failures += "rateguard-api candidate revision does not run the expected backend image" }
+        if ($apiImage -ne $ExpectedBackendImage) { $failures += "rateguard-api candidate revision does not run the expected backend image" }
         $failures += Test-CandidateEnvIsolation -ServiceInfo $apiInfo -ServiceLabel "rateguard-api" -ExpectedStagingValues $EXPECTED_STAGING_ENV
     }
 
@@ -385,7 +442,7 @@ function Confirm-CandidatePostconditions {
             $failures += "rateguard-worker production traffic allocation changed"
         }
         $workerImage = Get-DeployedImageReference -ServiceInfo $workerInfo
-        if ($workerImage -ne $BACKEND_IMAGE) { $failures += "rateguard-worker candidate revision does not run the expected backend image" }
+        if ($workerImage -ne $ExpectedBackendImage) { $failures += "rateguard-worker candidate revision does not run the expected backend image" }
         $failures += Test-CandidateEnvIsolation -ServiceInfo $workerInfo -ServiceLabel "rateguard-worker" -ExpectedStagingValues $EXPECTED_STAGING_ENV
     }
 
@@ -441,33 +498,36 @@ function Confirm-CandidatePostconditions {
 
     try {
         Invoke-NativeCommand -Operation "Describe backend candidate image" -FilePath "gcloud" -ArgumentList @(
-            "artifacts", "docker", "images", "describe", $BACKEND_IMAGE, "--format", "value(image_summary.digest)"
+            "artifacts", "docker", "images", "describe", $ExpectedBackendImage, "--format", "value(image_summary.digest)"
         ) | Out-Null
     } catch {
-        $failures += "backend candidate image $BACKEND_IMAGE not found in Artifact Registry"
+        $failures += "backend candidate image $ExpectedBackendImage not found in Artifact Registry"
     }
 
     try {
         Invoke-NativeCommand -Operation "Describe frontend candidate image" -FilePath "gcloud" -ArgumentList @(
-            "artifacts", "docker", "images", "describe", $FRONTEND_IMAGE, "--format", "value(image_summary.digest)"
+            "artifacts", "docker", "images", "describe", $ExpectedFrontendImage, "--format", "value(image_summary.digest)"
         ) | Out-Null
     } catch {
-        $failures += "frontend candidate image $FRONTEND_IMAGE not found in Artifact Registry"
+        $failures += "frontend candidate image $ExpectedFrontendImage not found in Artifact Registry"
     }
 
     return $failures
 }
 
 function Write-SuccessBanner {
-    # Reachable ONLY from the two call sites that already ran
-    # Confirm-CandidatePostconditions and confirmed zero failures.
-    param([string]$ApiUrl, [string]$WorkerUrl, [string]$WebUrl)
+    # Reachable ONLY from the one call site that already ran
+    # Confirm-CandidatePostconditions and confirmed zero failures. ImageTag
+    # is always passed explicitly -- never read from the HEAD-derived
+    # script-global $IMAGE_TAG, which would print the wrong tag after a
+    # -ResumeCandidate run against an earlier commit's image.
+    param([string]$ApiUrl, [string]$WorkerUrl, [string]$WebUrl, [string]$ImageTag)
     Write-Host "========================================================"
     Write-Host "CANDIDATE DEPLOYMENT COMPLETE (0% production traffic)"
     Write-Host "Candidate API URL:      $ApiUrl"
     Write-Host "Candidate Worker URL:   $WorkerUrl"
     Write-Host "Candidate Web URL:      $WebUrl"
-    Write-Host "Image tag:              $IMAGE_TAG"
+    Write-Host "Image tag:              $ImageTag"
     Write-Host "All postconditions verified."
     Write-Host "========================================================"
 }
@@ -477,14 +537,21 @@ function Complete-CandidateDeployment {
     # postcondition verification and either prints the success banner or
     # exits nonzero with a concise, safe failure summary. COMPLETE is never
     # printed unless every postcondition passed.
-    param([Parameter(Mandatory = $true)]$Urls, [Parameter(Mandatory = $true)][string]$WebUrl)
+    param(
+        [Parameter(Mandatory = $true)]$Urls,
+        [Parameter(Mandatory = $true)][string]$WebUrl,
+        [Parameter(Mandatory = $true)][string]$ExpectedBackendImage,
+        [Parameter(Mandatory = $true)][string]$ExpectedFrontendImage,
+        [Parameter(Mandatory = $true)][string]$ImageTag
+    )
 
-    $failures = Confirm-CandidatePostconditions -WorkerTaggedUrl $Urls.WorkerTaggedUrl -WorkerUntaggedUrl $Urls.WorkerUntaggedUrl
+    $failures = Confirm-CandidatePostconditions -WorkerTaggedUrl $Urls.WorkerTaggedUrl -WorkerUntaggedUrl $Urls.WorkerUntaggedUrl `
+        -ExpectedBackendImage $ExpectedBackendImage -ExpectedFrontendImage $ExpectedFrontendImage
     if ($failures.Count -gt 0) {
         $reasons = $failures -join "; "
         throw "candidate deployment postcondition verification failed: $reasons"
     }
-    Write-SuccessBanner -ApiUrl $Urls.ApiTaggedUrl -WorkerUrl $Urls.WorkerTaggedUrl -WebUrl $WebUrl
+    Write-SuccessBanner -ApiUrl $Urls.ApiTaggedUrl -WorkerUrl $Urls.WorkerTaggedUrl -WebUrl $WebUrl -ImageTag $ImageTag
 }
 
 function Deploy-Candidate {
@@ -532,23 +599,50 @@ function Deploy-Candidate {
     Initialize-StagingDataResources
 
     Write-Host "7. Building and deploying candidate frontend (--no-traffic --tag $CANDIDATE_TAG)..."
-    $webUrl = Deploy-CandidateFrontend -CandidateApiUrl $urls.ApiTaggedUrl
+    $webUrl = Deploy-CandidateFrontend -CandidateApiUrl $urls.ApiTaggedUrl -ImageTag $IMAGE_TAG -FrontendImage $FRONTEND_IMAGE
 
     Remove-Item "$CANDIDATE_ENV_FILE" -Force -ErrorAction SilentlyContinue
 
     Write-Host "8. Verifying postconditions..."
-    Complete-CandidateDeployment -Urls $urls -WebUrl $webUrl
+    Complete-CandidateDeployment -Urls $urls -WebUrl $webUrl `
+        -ExpectedBackendImage $BACKEND_IMAGE -ExpectedFrontendImage $FRONTEND_IMAGE -ImageTag $IMAGE_TAG
 }
 
 function Resume-Candidate {
+    # -CandidateImageTag names the ALREADY-BUILT candidate application image
+    # to treat as authoritative. It is REQUIRED and is never derived from the
+    # current git HEAD: HEAD may since have moved on to commits that touch
+    # only these deployment scripts (as happened here -- see header comment),
+    # while the actual candidate application image on Cloud Run/Artifact
+    # Registry still corresponds to an earlier commit.
+    param([Parameter(Mandatory = $true)][string]$CandidateImageTag)
+
+    if (-not (Test-CandidateImageTagFormat -Tag $CandidateImageTag)) {
+        throw "-CandidateImageTag '$CandidateImageTag' is not a valid candidate image tag. Expected format: candidate-[0-9a-f]{12}"
+    }
+    $resumeBackendImage = New-CandidateBackendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $CandidateImageTag
+    $resumeFrontendImage = New-CandidateFrontendImageReference -Region $REGION -ProjectId $PROJECT_ID -ImageTag $CandidateImageTag
+
     Write-Host "========================================================"
     Write-Host "   RateGuard AI -- Resuming Candidate (-ResumeCandidate)"
-    Write-Host "   Expected image tag: $IMAGE_TAG"
+    Write-Host "   Candidate application image tag (explicitly supplied): $CandidateImageTag"
+    Write-Host "   Deployment-script commit (traceability only, NOT used to resolve the candidate image): $GIT_SHA"
     Write-Host "========================================================"
 
     Invoke-NativeCommand -Operation "gcloud config set project" -FilePath "gcloud" -ArgumentList @("config", "set", "project", $PROJECT_ID) | Out-Null
 
-    Write-Host "1. Discovering and verifying existing backend image/tag/digest..."
+    Write-Host "1. Verifying the supplied candidate image exists in Artifact Registry and resolving its digest..."
+    $digestLines = Invoke-NativeCommand -Operation "Describe supplied candidate backend image" -FilePath "gcloud" -CaptureOutput -ArgumentList @(
+        "artifacts", "docker", "images", "describe", $resumeBackendImage, "--format", "value(image_summary.digest)"
+    )
+    $resumeBackendDigest = ($digestLines -join "").Trim()
+    if (-not $resumeBackendDigest) {
+        throw "Could not resolve an immutable digest for '$resumeBackendImage'. Refusing to resume against an image that could not be verified in Artifact Registry."
+    }
+    Write-Host "   Verified image:  $resumeBackendImage"
+    Write-Host "   Resolved digest: $resumeBackendDigest"
+
+    Write-Host "2. Discovering candidate API/worker revisions and verifying they run the supplied image..."
     $urls = Get-ValidatedCandidateBackendUrls
     $apiImage = Get-DeployedImageReference -ServiceInfo $urls.ApiInfo
     $workerImage = Get-DeployedImageReference -ServiceInfo $urls.WorkerInfo
@@ -556,33 +650,34 @@ function Resume-Candidate {
     if ($apiImage -ne $workerImage) {
         throw "Mismatch: rateguard-api candidate image ('$apiImage') differs from rateguard-worker candidate image ('$workerImage'). Refusing to silently reconcile -- investigate before resuming."
     }
-    if ($apiImage -ne $BACKEND_IMAGE) {
-        throw "Mismatch: the deployed candidate image ('$apiImage') does not match the expected image for the current git commit ('$BACKEND_IMAGE'). Refusing to silently rebuild or redeploy. Either check out the commit that was actually built, or run -DeployCandidate to build the current commit from scratch."
+    if ($apiImage -ne $resumeBackendImage) {
+        throw "Mismatch: the deployed candidate image ('$apiImage') does not match the supplied -CandidateImageTag image ('$resumeBackendImage'). Refusing to silently rebuild or redeploy. Pass the -CandidateImageTag that was actually deployed, or run -DeployCandidate to build the current commit from scratch."
     }
-    Write-Host "   Existing candidate image confirmed: $apiImage"
+    Write-Host "   Existing candidate API/worker image confirmed: $apiImage"
     Write-Host "   Candidate API URL:    $($urls.ApiTaggedUrl)"
     Write-Host "   Candidate Worker URL: $($urls.WorkerTaggedUrl)"
-    Write-Host "2. Backend image/API/worker already match the expected commit -- skipping rebuild and redeploy."
+    Write-Host "3. Backend image/API/worker already match the supplied tag -- skipping rebuild and redeploy."
 
-    Write-Host "3. Verifying/creating the missing staging push subscription (and re-verifying topics/DLQ)..."
+    Write-Host "4. Verifying/creating the missing staging push subscription (and re-verifying topics/DLQ)..."
     Initialize-StagingPubSub -WorkerTaggedUrl $urls.WorkerTaggedUrl -WorkerUntaggedUrl $urls.WorkerUntaggedUrl
 
-    Write-Host "4. Verifying staging BigQuery dataset/tables and GCS bucket (reloading the portfolio only if missing)..."
+    Write-Host "5. Verifying staging BigQuery dataset/tables and GCS bucket (reloading the portfolio only if missing)..."
     Initialize-StagingDataResources
 
-    Write-Host "5. Checking for an existing candidate frontend revision..."
+    Write-Host "6. Checking for an existing candidate frontend revision..."
     $webInfo = Get-CandidateServiceInfo -ServiceName "rateguard-web"
     $existingWebUrl = Get-CandidateTaggedUrl -ServiceInfo $webInfo -Tag $CANDIDATE_TAG
     if (Test-AbsoluteHttpsUrl -Url $existingWebUrl -RequiredHostFragment "rateguard-web" -RequireCandidateTagPrefix) {
         Write-Host "   Candidate frontend revision already exists ($existingWebUrl) -- skipping frontend build/deploy."
         $webUrl = $existingWebUrl
     } else {
-        Write-Host "   Candidate frontend revision missing -- building and deploying it now."
-        $webUrl = Deploy-CandidateFrontend -CandidateApiUrl $urls.ApiTaggedUrl
+        Write-Host "   Candidate frontend revision missing -- building and deploying it now using the SAME supplied tag ($CandidateImageTag), so all candidate artifacts represent the same application-source checkpoint."
+        $webUrl = Deploy-CandidateFrontend -CandidateApiUrl $urls.ApiTaggedUrl -ImageTag $CandidateImageTag -FrontendImage $resumeFrontendImage
     }
 
-    Write-Host "6. Verifying postconditions..."
-    Complete-CandidateDeployment -Urls $urls -WebUrl $webUrl
+    Write-Host "7. Verifying postconditions..."
+    Complete-CandidateDeployment -Urls $urls -WebUrl $webUrl `
+        -ExpectedBackendImage $resumeBackendImage -ExpectedFrontendImage $resumeFrontendImage -ImageTag $CandidateImageTag
 }
 
 function Invoke-CandidateDeploymentEntryPoint {
@@ -590,13 +685,14 @@ function Invoke-CandidateDeploymentEntryPoint {
     # path above throws instead of exiting directly, which keeps
     # Deploy-Candidate/Resume-Candidate/Complete-CandidateDeployment safely
     # callable from tests without terminating the host process.
-    param([switch]$DeployCandidate, [switch]$ResumeCandidate)
+    param([switch]$DeployCandidate, [switch]$ResumeCandidate, [string]$CandidateImageTag)
     try {
         Assert-MutuallyExclusiveModes -DeployCandidate:$DeployCandidate -ResumeCandidate:$ResumeCandidate
+        Assert-ValidResumeArguments -ResumeCandidate:$ResumeCandidate -CandidateImageTag $CandidateImageTag
         if ($DeployCandidate) {
             Deploy-Candidate
         } elseif ($ResumeCandidate) {
-            Resume-Candidate
+            Resume-Candidate -CandidateImageTag $CandidateImageTag
         } else {
             Write-Plan
         }
@@ -607,5 +703,5 @@ function Invoke-CandidateDeploymentEntryPoint {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Invoke-CandidateDeploymentEntryPoint -DeployCandidate:$DeployCandidate -ResumeCandidate:$ResumeCandidate
+    Invoke-CandidateDeploymentEntryPoint -DeployCandidate:$DeployCandidate -ResumeCandidate:$ResumeCandidate -CandidateImageTag $CandidateImageTag
 }
