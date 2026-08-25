@@ -36,6 +36,7 @@ class EvidenceType(str, Enum):  # noqa: UP042
     ROOT_CAUSE = "ROOT_CAUSE"
     PORTFOLIO_EXPOSURE = "PORTFOLIO_EXPOSURE"
     ASSURANCE_DECISION = "ASSURANCE_DECISION"
+    GEMINI_INVOCATION = "GEMINI_INVOCATION"
 
 
 class EvidenceRecord(BaseModel):

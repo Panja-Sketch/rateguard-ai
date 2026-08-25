@@ -1,17 +1,40 @@
+import hashlib
+import json
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from decimal import Decimal
 from typing import Any
 
+from app.adapters.extractor_registry import EXTRACTOR_REGISTRY, excel_layout_recognized
+from app.adapters.models import AdapterResult, SourceDescriptor, SourceFormat
 from app.adapters.runtime_connector import BlackBoxRatingApiAdapter
+from app.agents.config import get_agent_config
+from app.agents.decision_schemas import (
+    MAX_ADDITIONAL_PROBE_TESTS,
+    MAX_REGRESSION_TESTS,
+    MAX_SELECTED_TESTS,
+    DifferencePrioritizationDecision,
+    EvidenceSufficiencyDecision,
+    ExtractionStrategyDecision,
+    GeminiDecisionBase,
+    PortfolioAnalysisDecision,
+    RemediationProposalDecision,
+    RemediationRevalidationSelectionDecision,
+    TestSelectionDecision,
+)
+from app.agents.gemini_client import GeminiDecisionClient, GeminiInvocationEvidence
 from app.engines.diff import SemanticDiffEngine
 from app.engines.impact import PricingImpactEngine
 from app.engines.oracle.calculator import PremiumOracleCalculator
 from app.engines.portfolio import PortfolioExposureAnalyzer
 from app.engines.reconciliation import PricingReconciliationEngine
 from app.engines.testing import RiskDirectedTestGenerator
+from app.engines.testing.models import PricingTestScenario, ScenarioClassification
 from app.ipir.package import IPIRPackage
+from app.ipir.schema import validate_ipir_schema
 from app.models import (
     AgentAction,
     AnalysisStatus,
@@ -36,20 +59,55 @@ from app.services.remediation_service import RemediationService
 from app.services.validation_service import MissionValidationService
 from app.storage import AssuranceRunStatus, BaseRunStore, EvidenceRecord, EvidenceType
 
-# NOTE: This supervisor does not currently perform live structured Gemini tool
-# calls (that is tracked as a follow-up, out of scope for this change) — every
-# AgentAction below is a deterministic-pipeline record. `ai_runtime.model_status`
-# reflects that honestly rather than claiming a model invocation that didn't happen.
+# Honest ai_runtime.model_status values. NOT_INVOKED is used whenever a mission
+# never reaches a real decision point (e.g. clean equivalence with 0 diffs).
 AI_RUNTIME_NOT_INVOKED_STATUS = "NOT_INVOKED_DETERMINISTIC_PIPELINE"
+AI_RUNTIME_LIVE_STATUS = "GEMINI_LIVE_DECISIONS_APPLIED"
+AI_RUNTIME_FALLBACK_STATUS = "DETERMINISTIC_FALLBACK_GEMINI_UNAVAILABLE"
+
+# Bounded adaptive-investigation budgets (see class docstring).
+MAX_GEMINI_CALLS_PER_MISSION = 6
+MAX_PROBE_ROUNDS = 1
+
+# Below this confidence, an extraction result always requires human review
+# regardless of which extractor (deterministic, Gemini-selected, or fallback)
+# produced it.
+LOW_CONFIDENCE_REVIEW_THRESHOLD = 0.60
+
+
+@dataclass
+class _InvestigationBudget:
+    """Mission-scoped, single-use tracker for Gemini call/probe budgets and
+    duplicate-probe prevention. One instance per `run_mission()` call."""
+
+    gemini_call_count: int = 0
+    any_gemini_success: bool = False
+    any_gemini_attempted: bool = False
+    evidence_ids: list[str] = dc_field(default_factory=list)
+    executed_test_ids: set[str] = dc_field(default_factory=set)
 
 
 class AssuranceSupervisor:
-    """Assurance Mission V2 deterministic pipeline supervisor.
-    Executes evidence-driven assurance workflows while enforcing strict deterministic calculation boundaries.
-    Real Gemini-backed structured tool selection is not yet wired into this class (see AI_RUNTIME_NOT_INVOKED_STATUS).
+    """Assurance Mission V2 strategic supervisor.
+
+    Runs the mandatory deterministic evidence pipeline (validation, IPIR
+    comparison, dependency impact, candidate-test generation, premium oracle,
+    target execution, trace reconciliation) unconditionally, and consults a
+    real, structured Gemini call at a small set of bounded decision points
+    (difference prioritization, boundary-test selection, evidence-sufficiency,
+    portfolio justification, remediation proposal, and remediation-revalidation
+    test selection). Gemini never invents a value, a finding, or a policy
+    count — it only selects among IDs the deterministic engines already
+    produced, validated against the candidate pool before anything executes.
+
+    Every Gemini call is bounded by `MAX_GEMINI_CALLS_PER_MISSION` and
+    `MAX_PROBE_ROUNDS`. Any failure (disabled, no credentials, timeout, quota,
+    malformed/schema-invalid response) falls back to the pre-existing
+    deterministic behavior and is recorded as a visible fallback action —
+    a Gemini outage can never corrupt or block deterministic calculations.
     """
 
-    def __init__(self, store: BaseRunStore):
+    def __init__(self, store: BaseRunStore, gemini_client: GeminiDecisionClient | None = None):
         self.store = store
         self.semantic_diff_engine = SemanticDiffEngine()
         self.impact_engine = PricingImpactEngine()
@@ -57,6 +115,7 @@ class AssuranceSupervisor:
         self.reconciliation_engine = PricingReconciliationEngine()
         self.portfolio_analyzer = PortfolioExposureAnalyzer()
         self.remediation_service = RemediationService()
+        self.gemini = gemini_client if gemini_client is not None else GeminiDecisionClient(get_agent_config())
 
     def _mark_stage(self, mission_id: str, stage_name: str) -> None:
         """Persists a real stage-start event and updates current_stage BEFORE that
@@ -105,6 +164,265 @@ class AssuranceSupervisor:
         )
         return result
 
+    def _record_gemini_evidence(self, mission_id: str, evidence: GeminiInvocationEvidence) -> str:
+        """Persists one Gemini invocation attempt (success or failure) as a typed,
+        auditable evidence record. Called for every attempt, never only successes."""
+        ev = EvidenceRecord(
+            evidence_id=f"EV-{uuid.uuid4().hex[:6].upper()}",
+            run_id=mission_id,
+            evidence_type=EvidenceType.GEMINI_INVOCATION,
+            title=f"Gemini Invocation: {evidence.decision_type}",
+            description=(
+                evidence.rationale
+                if evidence.success and evidence.rationale
+                else f"{evidence.decision_type} invocation failed: {evidence.failure_category}"
+            ),
+            data_summary=evidence.dict(),
+        )
+        self.store.add_evidence(mission_id, ev)
+        return ev.evidence_id
+
+    def _ask_gemini(
+        self,
+        run_id: str,
+        budget: _InvestigationBudget,
+        decision_type: str,
+        schema: type[GeminiDecisionBase],
+        system_instruction: str,
+        prompt: str,
+    ) -> tuple[GeminiDecisionBase | None, GeminiInvocationEvidence | None]:
+        """Attempts one budgeted, structured Gemini decision call.
+
+        `run_id` is any store-addressable id this call's evidence/events should
+        be filed under — a mission id for the investigation decision points, or
+        a bare source id for the pre-mission CHOOSE_EXTRACTION_STRATEGY call.
+
+        Returns (decision, evidence). `evidence` is None only when the
+        per-mission call budget was already exhausted before any attempt was
+        made. `decision` is None whenever the call failed or was skipped —
+        callers MUST apply their own deterministic fallback in that case.
+        """
+        if budget.gemini_call_count >= MAX_GEMINI_CALLS_PER_MISSION:
+            self.store.log_event(
+                run_id,
+                stage=decision_type,
+                message=f"Deterministic fallback used for {decision_type}: Gemini call budget exhausted.",
+            )
+            return None, None
+
+        budget.gemini_call_count += 1
+        decision, evidence = self.gemini.decide(decision_type, schema, system_instruction, prompt)
+        budget.evidence_ids.append(self._record_gemini_evidence(run_id, evidence))
+
+        if decision is not None and evidence.success:
+            budget.any_gemini_success = True
+            self.store.log_event(
+                run_id, stage=decision_type,
+                message=f"Gemini decision {decision_type}: {evidence.rationale}",
+            )
+        else:
+            budget.any_gemini_attempted = True
+            self.store.log_event(
+                run_id, stage=decision_type,
+                message=f"Deterministic fallback used for {decision_type} (failure_category={evidence.failure_category}).",
+            )
+        return decision, evidence
+
+    def _decision_action(
+        self,
+        agent_role: str,
+        decision_type: str,
+        summary: str,
+        evidence: GeminiInvocationEvidence | None,
+        *,
+        is_gemini: bool,
+        fallback_reason: str | None = None,
+        needs_human_review: bool = False,
+    ) -> AgentAction:
+        """Builds the single AgentAction timeline entry for one decision point,
+        whether it was a real Gemini decision or a deterministic fallback.
+        `model_id`/`invocation_id` are only ever stamped when `is_gemini` is True
+        and backed by a real successful invocation."""
+        return AgentAction(
+            action_id=f"ACT-{uuid.uuid4().hex[:6].upper()}",
+            agent_role=agent_role,
+            action_type="DECISION",
+            summary=summary,
+            rationale=(evidence.rationale if evidence and evidence.success else None) or fallback_reason,
+            latency_ms=evidence.latency_ms if evidence else 0.0,
+            model_id=evidence.model_id if (evidence and is_gemini) else None,
+            invocation_id=evidence.invocation_id if evidence else None,
+            decision_type=decision_type,
+            is_gemini_decision=is_gemini,
+            is_fallback=not is_gemini,
+            fallback_reason=None if is_gemini else fallback_reason,
+            needs_human_review=needs_human_review,
+        )
+
+    def _mandatory_evidence_ok(self, result: AssuranceResultV2) -> bool:
+        """True only when every mandatory deterministic evidence section for this
+        mission actually completed. A PASS release decision must never be issued
+        when this is False — see STAGE 8 in `run_mission`."""
+        return (
+            result.validation.status == AnalysisStatus.SUCCEEDED
+            and result.experiments.status == AnalysisStatus.SUCCEEDED
+            and result.semantic_analysis.status in (AnalysisStatus.SUCCEEDED, AnalysisStatus.NOT_RUN)
+        )
+
+    def extract_and_compile_source(self, source: SourceDescriptor, content: bytes) -> AdapterResult:
+        """Mandatory, bounded source-extraction entry point — the single place
+        the mandatory pipeline (hash/provenance capture, extractor selection,
+        extraction, IPIR schema re-validation, evidence persistence) runs for
+        every uploaded source, whether or not a mission exists yet.
+
+        Gemini is consulted (via CHOOSE_EXTRACTION_STRATEGY) only when the
+        source format is inherently ambiguous — a regulatory PDF, or an Excel
+        workbook whose sheet layout doesn't match the recognized rate-table
+        convention. Already-valid IPIR JSON and recognized structured/
+        platform-config JSON are always handled deterministically; Gemini is
+        never invoked to parse a source a deterministic parser already
+        handles, and it may only select an extractor id already present in
+        `EXTRACTOR_REGISTRY` — an invented or out-of-allowlist id is rejected
+        and the most conservative (human-review) extractor is used instead.
+        """
+        run_id = source.source_id
+        budget = _InvestigationBudget()
+        sha256_hash = hashlib.sha256(content).hexdigest()
+
+        self.store.log_event(
+            run_id, stage="SOURCE_VALIDATION",
+            message=f"Captured source hash and provenance for '{source.name}' ({len(content)} bytes).",
+        )
+
+        extractor_id, selection_kind, gemini_evidence = self._select_extraction_strategy(source, content, budget)
+        spec = EXTRACTOR_REGISTRY[extractor_id]
+
+        self.store.log_event(
+            run_id, stage="EXTRACTION",
+            message=f"Selected extractor '{extractor_id}' via {selection_kind}.",
+        )
+        result = spec.extract(source, content)
+
+        # Mandatory deterministic checkpoint: no extractor's output — deterministic,
+        # Gemini-selected, or fallback — may bypass IPIR schema validation.
+        schema_issues = validate_ipir_schema(result.ipir_package)
+        if schema_issues:
+            result.requires_human_review = True
+            result.warnings.extend(f"Schema validation issue: {issue}" for issue in schema_issues)
+
+        if result.confidence < LOW_CONFIDENCE_REVIEW_THRESHOLD:
+            result.requires_human_review = True
+
+        location_ref = None
+        if result.provenance and result.provenance.sources:
+            location_ref = result.provenance.sources[0].location or result.provenance.sources[0].section
+
+        result.evidence.update({
+            "source_id": source.source_id,
+            "source_sha256": sha256_hash,
+            "filename": source.name,
+            "source_format": source.source_type.value,
+            "size_bytes": len(content),
+            "selected_extractor": extractor_id,
+            "selection_kind": selection_kind,
+            "location_reference": location_ref,
+            "gemini_invocation_id": gemini_evidence.invocation_id if gemini_evidence else None,
+        })
+
+        ev = EvidenceRecord(
+            evidence_id=f"EV-{uuid.uuid4().hex[:6].upper()}",
+            run_id=run_id,
+            evidence_type=EvidenceType.SOURCE,
+            title=f"Source Extraction: {source.name}",
+            description=(
+                f"Selected extractor '{extractor_id}' via {selection_kind}; "
+                f"confidence={result.confidence}, human_review={result.requires_human_review}."
+            ),
+            source_ref=source.source_id,
+            data_summary={
+                "sha256": sha256_hash,
+                "filename": source.name,
+                "size_bytes": len(content),
+                "selected_extractor": extractor_id,
+                "selection_kind": selection_kind,
+                "confidence": result.confidence,
+                "warnings": result.warnings,
+                "requires_human_review": result.requires_human_review,
+                "location_reference": location_ref,
+            },
+        )
+        self.store.add_evidence(run_id, ev)
+
+        return result
+
+    def _select_extraction_strategy(
+        self, source: SourceDescriptor, content: bytes, budget: "_InvestigationBudget"
+    ) -> tuple[str, str, GeminiInvocationEvidence | None]:
+        """Returns (extractor_id, selection_kind, gemini_evidence_or_None).
+        `selection_kind` is one of 'DETERMINISTIC', 'GEMINI', or 'FALLBACK'."""
+
+        if source.source_type == SourceFormat.STRUCTURED_JSON:
+            try:
+                IPIRPackage.model_validate_json(content.decode("utf-8"))
+                return "structured_json_direct_parser", "DETERMINISTIC", None
+            except Exception:
+                pass
+            try:
+                payload = json.loads(content.decode("utf-8"))
+            except Exception:
+                payload = None
+            if isinstance(payload, dict) and ("ipir_payload" in payload or "rateBook" in payload):
+                return "platform_config_adapter", "DETERMINISTIC", None
+            # A recognized format (JSON) that is neither valid IPIR nor a known
+            # wrapper shape is genuinely conflicting — flag for human review
+            # deterministically. Never escalate a plain-JSON ambiguity to Gemini.
+            return "structured_json_direct_parser", "FALLBACK", None
+
+        if source.source_type == SourceFormat.PLATFORM_CONFIG:
+            return "platform_config_adapter", "DETERMINISTIC", None
+
+        if source.source_type == SourceFormat.EXCEL:
+            if excel_layout_recognized(content):
+                return "excel_named_range_extractor", "DETERMINISTIC", None
+            return self._choose_extractor_via_gemini(
+                source, budget, ["excel_named_range_extractor", "excel_manual_review_extractor"],
+            )
+
+        if source.source_type == SourceFormat.PDF:
+            # Regulatory PDFs are inherently unstructured text — always a real
+            # Gemini decision among the allowlisted extractors.
+            return self._choose_extractor_via_gemini(
+                source, budget, ["pdf_structured_section_extractor", "pdf_manual_review_extractor"],
+            )
+
+        raise ValueError(f"No extraction strategy policy defined for source format '{source.source_type}'.")
+
+    def _choose_extractor_via_gemini(
+        self, source: SourceDescriptor, budget: "_InvestigationBudget", allowlist: list[str],
+    ) -> tuple[str, str, GeminiInvocationEvidence | None]:
+        """`allowlist` MUST be ordered with the most conservative (human-review)
+        extractor last — that is the safe default used on any failure or
+        out-of-vocabulary response, since an ambiguous source has no
+        deterministic status quo to fall back to."""
+        decision, evidence = self._ask_gemini(
+            source.source_id, budget, "CHOOSE_EXTRACTION_STRATEGY", ExtractionStrategyDecision,
+            system_instruction=(
+                "You are the RateGuard Assurance Supervisor selecting an extraction strategy for "
+                "an ambiguous pricing source. You MUST only select a requested_tool from the "
+                "provided allowlisted extractor ids — never invent an extractor."
+            ),
+            prompt=(
+                f"Source: {source.name} (format: {source.source_type.value}).\n"
+                f"Allowlisted extractor ids: {allowlist}\n"
+                "Select the extractor id best suited to this source and explain why."
+            ),
+        )
+        if decision is not None and decision.requested_tool in allowlist:
+            return decision.requested_tool, "GEMINI", evidence
+        # Invalid/out-of-allowlist selection, or Gemini unavailable/failed: default
+        # to the most conservative allowlisted extractor — never silently guess.
+        return allowlist[-1], "FALLBACK", evidence
+
     def run_mission(
         self,
         mission: AssuranceMission,
@@ -115,6 +433,9 @@ class AssuranceSupervisor:
         agent_actions: list[AgentAction] = []
         tool_invocations: list[ToolInvocation] = []
         evidence_ids: list[str] = []
+        budget = _InvestigationBudget()
+        raw_diff_result = None
+        test_plan = None
 
         result = AssuranceResultV2(
             mission_id=mission.mission_id,
@@ -122,7 +443,7 @@ class AssuranceSupervisor:
             overall_status="RUNNING",
             ai_runtime={
                 "model_id": "gemini-3.7-flash",
-                "framework": "Google ADK",
+                "framework": "Google GenAI SDK (google-genai structured output)",
                 "model_status": AI_RUNTIME_NOT_INVOKED_STATUS,
             },
         )
@@ -146,7 +467,7 @@ class AssuranceSupervisor:
             summary=f"Validated mission sources and connector specifications ({len(val_issues)} issues found).",
             rationale="Verifying schema compatibility and endpoint security before execution.",
             latency_ms=val_latency,
-            model_id="gemini-3.7-flash",
+            selected_tool="validate_ipir_schema",
         )
         agent_actions.append(action_val)
 
@@ -240,9 +561,51 @@ class AssuranceSupervisor:
             self.store.add_evidence(mission.mission_id, ev_sem)
             evidence_ids.append(ev_sem.evidence_id)
 
+            # Real Gemini decision point: prioritize which confirmed differences
+            # deserve focused boundary testing. Gemini may only select finding_ids
+            # the deterministic diff engine already produced; deterministic
+            # fallback retains every difference.
+            prioritized_diff_ids: list[str] = [d.finding_id for d in sem_diffs]
+            if sem_diffs:
+                if self._is_cancelled(mission.mission_id, cancellation_check):
+                    return self._finalize_cancelled(mission, result, agent_actions)
+
+                candidate_ids = set(prioritized_diff_ids)
+                decision, evidence = self._ask_gemini(
+                    mission.mission_id, budget, "PRIORITIZE_DIFFERENCES", DifferencePrioritizationDecision,
+                    system_instruction=(
+                        "You are the RateGuard Assurance Supervisor prioritizing which already-detected "
+                        "semantic pricing differences deserve focused boundary testing. You MUST only "
+                        "select finding_ids from the provided list — never invent a finding."
+                    ),
+                    prompt=(
+                        "Deterministically-identified semantic pricing differences (JSON): "
+                        f"{[{'finding_id': d.finding_id, 'severity': d.severity, 'title': d.title} for d in sem_diffs]}\n"
+                        "Select which finding_ids deserve investigative priority for boundary testing."
+                    ),
+                )
+                chosen = [i for i in (decision.selected_difference_ids if decision else []) if i in candidate_ids]
+                if decision is not None and chosen:
+                    prioritized_diff_ids = chosen
+                    agent_actions.append(self._decision_action(
+                        "Semantic Assurance Specialist", "PRIORITIZE_DIFFERENCES",
+                        f"Gemini prioritized {len(chosen)} of {len(sem_diffs)} differences for focused investigation.",
+                        evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+                    ))
+                else:
+                    reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
+                        evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                    )
+                    agent_actions.append(self._decision_action(
+                        "Semantic Assurance Specialist", "PRIORITIZE_DIFFERENCES",
+                        f"Deterministic fallback: retaining all {len(sem_diffs)} differences for investigation.",
+                        evidence, is_gemini=False, fallback_reason=reason,
+                    ))
+
             if len(sem_diffs) == 0:
                 is_clean_equivalence = True
         else:
+            prioritized_diff_ids = []
             result.semantic_analysis = SectionResult(
                 status=AnalysisStatus.NOT_RUN,
                 reason="Semantic comparison skipped for Black-Box Runtime Verification mode.",
@@ -377,7 +740,55 @@ class AssuranceSupervisor:
         exp_start = time.time()
         if raw_diff_result and raw_impact:
             test_plan = self.test_generator.generate_plan(left_pkg, raw_diff_result, raw_impact)
-            selected_tests = test_plan.selected_scenarios
+            selected_tests = test_plan.selected_scenarios  # deterministic default
+
+            # Real Gemini decision point: select which deterministically-generated
+            # candidate boundary tests to execute. Gemini may only choose scenario
+            # ids from the candidate pool the optimizer already produced.
+            if self._is_cancelled(mission.mission_id, cancellation_check):
+                return self._finalize_cancelled(mission, result, agent_actions)
+
+            candidate_pool: dict[str, PricingTestScenario] = {sc.id: sc for sc in test_plan.candidate_scenarios}
+            prioritized_set = set(prioritized_diff_ids)
+            candidate_summaries = [
+                {
+                    "id": sc.id,
+                    "name": sc.name,
+                    "classification": sc.classification.value,
+                    "targets_prioritized_difference": bool(prioritized_set & set(sc.target_difference_ids)),
+                }
+                for sc in test_plan.candidate_scenarios
+            ]
+            decision, evidence = self._ask_gemini(
+                mission.mission_id, budget, "SELECT_BOUNDARY_TESTS", TestSelectionDecision,
+                system_instruction=(
+                    "You are the RateGuard Assurance Supervisor selecting which deterministically-generated "
+                    "candidate boundary test scenarios to execute. You MUST only select scenario ids from "
+                    "the provided candidate pool — never invent a scenario or a risk value. Prefer scenarios "
+                    "that target the prioritized differences."
+                ),
+                prompt=(
+                    f"Candidate scenarios (JSON): {candidate_summaries}\n"
+                    f"Select up to {MAX_SELECTED_TESTS} scenario ids to execute."
+                ),
+            )
+            chosen_ids = [i for i in (decision.selected_test_ids if decision else []) if i in candidate_pool]
+            if decision is not None and chosen_ids:
+                selected_tests = [candidate_pool[i] for i in chosen_ids]
+                agent_actions.append(self._decision_action(
+                    "Risk-Directed Test Planner", "SELECT_BOUNDARY_TESTS",
+                    f"Gemini selected {len(selected_tests)} of {len(candidate_pool)} candidate boundary tests.",
+                    evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+                ))
+            else:
+                reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
+                    evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                )
+                agent_actions.append(self._decision_action(
+                    "Risk-Directed Test Planner", "SELECT_BOUNDARY_TESTS",
+                    f"Deterministic fallback: using optimizer-selected {len(selected_tests)} boundary tests.",
+                    evidence, is_gemini=False, fallback_reason=reason,
+                ))
         else:
             selected_tests = []
 
@@ -389,9 +800,11 @@ class AssuranceSupervisor:
         target_calc = PremiumOracleCalculator(right_pkg) if right_pkg else None
         runtime_adapter = BlackBoxRatingApiAdapter(mission.runtime_connector) if mission.runtime_connector else None
 
-        for tc in selected_tests:
+        def _run_probe(tc: PricingTestScenario) -> tuple[Decimal, Decimal]:
+            """Executes exactly one deterministic premium-oracle-vs-target probe.
+            Which scenario reaches this function is Gemini's only discretion —
+            the arithmetic itself is untouched deterministic engine code."""
             exp_prem = oracle.calculate_policy_premium(tc.risk_values).final_premium
-
             if target_calc:
                 act_prem = target_calc.calculate_policy_premium(tc.risk_values).final_premium
             elif runtime_adapter:
@@ -401,16 +814,21 @@ class AssuranceSupervisor:
                     act_prem = Decimal("0.00")
             else:
                 act_prem = Decimal("0.00")
+            return exp_prem, act_prem
 
+        for tc in selected_tests:
+            exp_prem, act_prem = _run_probe(tc)
             matched = exp_prem == act_prem
             if matched:
                 match_count += 1
             else:
                 mismatch_count += 1
 
+            scenario_id = getattr(tc, "id", getattr(tc, "scenario_id", "RG-EXP"))
+            budget.executed_test_ids.add(scenario_id)
             experiments_list.append(
                 RuntimeExperiment(
-                    experiment_id=getattr(tc, "id", getattr(tc, "scenario_id", "RG-EXP")),
+                    experiment_id=scenario_id,
                     probe_name=tc.name,
                     category="RISK_DIRECTED",
                     risk_inputs=tc.risk_values,
@@ -420,12 +838,101 @@ class AssuranceSupervisor:
                 )
             )
 
+        # Real Gemini decision point (bounded to MAX_PROBE_ROUNDS): decide whether
+        # enough evidence has been gathered, or request one more bounded round of
+        # additional boundary probes from the untested candidate pool. Never
+        # re-executes a scenario id already run in this mission.
+        probe_round = 0
+        while (
+            probe_round < MAX_PROBE_ROUNDS
+            and mismatch_count > 0
+            and test_plan is not None
+            and budget.gemini_call_count < MAX_GEMINI_CALLS_PER_MISSION
+        ):
+            if self._is_cancelled(mission.mission_id, cancellation_check):
+                return self._finalize_cancelled(mission, result, agent_actions)
+
+            remaining_pool = {
+                sc.id: sc for sc in test_plan.candidate_scenarios if sc.id not in budget.executed_test_ids
+            }
+            if not remaining_pool:
+                break
+
+            mismatched_probe_names = [e.probe_name for e in experiments_list if not e.matches]
+            decision, evidence = self._ask_gemini(
+                mission.mission_id, budget, "EVIDENCE_SUFFICIENCY", EvidenceSufficiencyDecision,
+                system_instruction=(
+                    "You are the RateGuard Assurance Supervisor deciding whether enough boundary-test "
+                    "evidence has been gathered, or whether one more bounded probe round against the "
+                    "untested candidate pool is warranted. You MUST only select scenario ids from the "
+                    "provided remaining candidate pool."
+                ),
+                prompt=(
+                    f"Mismatches reproduced so far: {mismatched_probe_names}\n"
+                    "Remaining untested candidates (JSON): "
+                    f"{[{'id': sc.id, 'name': sc.name} for sc in remaining_pool.values()]}\n"
+                    f"You may request up to {MAX_ADDITIONAL_PROBE_TESTS} additional scenario ids."
+                ),
+            )
+            probe_round += 1
+
+            if decision is None or decision.stop_condition == "SUFFICIENT" or not decision.additional_test_ids:
+                reason = None if decision is not None else (
+                    evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                )
+                agent_actions.append(self._decision_action(
+                    "Assurance Supervisor", "EVIDENCE_SUFFICIENCY",
+                    "Gemini determined evidence is sufficient; no additional probe round executed."
+                    if decision is not None
+                    else "Deterministic fallback: no additional probe round executed.",
+                    evidence, is_gemini=decision is not None,
+                    fallback_reason=reason,
+                    needs_human_review=(decision.needs_human_review if decision else False),
+                ))
+                break
+
+            extra_ids = [i for i in decision.additional_test_ids if i in remaining_pool][:MAX_ADDITIONAL_PROBE_TESTS]
+            if not extra_ids:
+                agent_actions.append(self._decision_action(
+                    "Assurance Supervisor", "EVIDENCE_SUFFICIENCY",
+                    "Gemini requested additional evidence but returned no valid untested scenario ids; stopping probe loop.",
+                    evidence, is_gemini=False, fallback_reason="NO_VALID_IDS_IN_RESPONSE",
+                ))
+                break
+
+            agent_actions.append(self._decision_action(
+                "Assurance Supervisor", "EVIDENCE_SUFFICIENCY",
+                f"Gemini requested {len(extra_ids)} additional boundary probe(s) before concluding investigation.",
+                evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+            ))
+
+            for extra_id in extra_ids:
+                tc = remaining_pool[extra_id]
+                exp_prem, act_prem = _run_probe(tc)
+                matched = exp_prem == act_prem
+                if matched:
+                    match_count += 1
+                else:
+                    mismatch_count += 1
+                budget.executed_test_ids.add(extra_id)
+                experiments_list.append(
+                    RuntimeExperiment(
+                        experiment_id=extra_id,
+                        probe_name=tc.name,
+                        category="ADDITIONAL_PROBE",
+                        risk_inputs=tc.risk_values,
+                        expected_premium=str(exp_prem),
+                        actual_premium=str(act_prem),
+                        matches=matched,
+                    )
+                )
+
         exp_latency = (time.time() - exp_start) * 1000
 
         result.experiments = SectionResult(
             status=AnalysisStatus.SUCCEEDED,
             data=ExperimentsData(
-                total_generated=test_plan.candidate_count,
+                total_generated=test_plan.candidate_count if test_plan is not None else len(selected_tests),
                 total_executed=len(selected_tests),
                 match_count=match_count,
                 mismatch_count=mismatch_count,
@@ -501,7 +1008,45 @@ class AssuranceSupervisor:
         # STAGE 6: Portfolio Blast Radius & Measured Telemetry
         self._mark_stage(mission.mission_id, "PORTFOLIO_ANALYSIS")
         port_start = time.time()
-        if right_pkg:
+
+        # Real Gemini decision point: justify whether the costly 50K-policy scan
+        # is warranted. Only consulted when zero mismatches were reproduced — a
+        # confirmed mismatch always forces the scan regardless of this vote, and
+        # a Gemini failure defaults to the safe conservative choice: run it.
+        run_portfolio = True
+        if right_pkg and mismatch_count == 0:
+            if self._is_cancelled(mission.mission_id, cancellation_check):
+                return self._finalize_cancelled(mission, result, agent_actions)
+
+            decision, evidence = self._ask_gemini(
+                mission.mission_id, budget, "PORTFOLIO_JUSTIFICATION", PortfolioAnalysisDecision,
+                system_instruction=(
+                    "You are the RateGuard Assurance Supervisor deciding whether the costly full "
+                    "50,000-policy portfolio blast-radius scan is warranted given zero reproduced "
+                    "premium mismatches."
+                ),
+                prompt=(
+                    f"Semantic differences identified: {len(sem_diffs)}. Premium mismatches reproduced: 0. "
+                    "Decide whether the full portfolio exposure scan should still run."
+                ),
+            )
+            if decision is not None:
+                run_portfolio = decision.should_run_portfolio
+                agent_actions.append(self._decision_action(
+                    "Portfolio Exposure Analyst", "PORTFOLIO_JUSTIFICATION",
+                    f"Gemini {'requested' if run_portfolio else 'waived'} the full portfolio exposure scan.",
+                    evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+                ))
+            else:
+                run_portfolio = True
+                reason = evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                agent_actions.append(self._decision_action(
+                    "Portfolio Exposure Analyst", "PORTFOLIO_JUSTIFICATION",
+                    "Deterministic fallback: running full portfolio scan (safe default; Gemini unavailable).",
+                    evidence, is_gemini=False, fallback_reason=reason,
+                ))
+
+        if right_pkg and run_portfolio:
             raw_port = self.portfolio_analyzer.evaluate_portfolio(
                 left_package=left_pkg,
                 right_package=right_pkg,
@@ -541,6 +1086,11 @@ class AssuranceSupervisor:
                 latency_ms=port_duration * 1000,
             )
             agent_actions.append(action_blast)
+        elif right_pkg and not run_portfolio:
+            result.blast_radius = SectionResult(
+                status=AnalysisStatus.NOT_RUN,
+                reason="Portfolio blast radius scan waived by Gemini justification (zero premium mismatches reproduced).",
+            )
         else:
             result.blast_radius = SectionResult(
                 status=AnalysisStatus.NOT_RUN,
@@ -553,17 +1103,107 @@ class AssuranceSupervisor:
         # STAGE 7: Remediation Proposal & Revalidation
         self._mark_stage(mission.mission_id, "REMEDIATION")
         if right_pkg and result.semantic_analysis.data and result.semantic_analysis.data.differences:
-            rem_prop = self.remediation_service.generate_remediation_proposal(
-                left_pkg, right_pkg, result.semantic_analysis.data.differences
+            all_diffs = result.semantic_analysis.data.differences
+            finding_ids = {d.finding_id for d in all_diffs}
+
+            # Real Gemini decision point: propose a structured remediation candidate
+            # by selecting which confirmed findings to correct. Gemini may only
+            # choose finding_ids the diff engine already produced; the deterministic
+            # remediation service applies each finding's own recorded intent_value —
+            # Gemini never supplies or invents a corrected number itself.
+            if self._is_cancelled(mission.mission_id, cancellation_check):
+                return self._finalize_cancelled(mission, result, agent_actions)
+
+            decision, evidence = self._ask_gemini(
+                mission.mission_id, budget, "PROPOSE_REMEDIATION", RemediationProposalDecision,
+                system_instruction=(
+                    "You are the RateGuard Assurance Supervisor proposing a structured remediation "
+                    "candidate. You MUST only select finding_ids from the provided list, and MUST NOT "
+                    "invent a corrected value — the deterministic remediation service applies each "
+                    "finding's own recorded intent_value."
+                ),
+                prompt=(
+                    "Confirmed findings (JSON): "
+                    f"{[{'finding_id': d.finding_id, 'title': d.title, 'severity': d.severity} for d in all_diffs]}\n"
+                    "Select which finding_ids the remediation candidate should correct."
+                ),
             )
+            chosen_finding_ids = [i for i in (decision.selected_finding_ids if decision else []) if i in finding_ids]
+            if decision is not None and chosen_finding_ids:
+                target_diffs = [d for d in all_diffs if d.finding_id in chosen_finding_ids]
+                agent_actions.append(self._decision_action(
+                    "Remediation Specialist", "PROPOSE_REMEDIATION",
+                    f"Gemini proposed correcting {len(target_diffs)} of {len(all_diffs)} confirmed findings.",
+                    evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+                ))
+            else:
+                target_diffs = all_diffs  # safe conservative default: fix every confirmed finding
+                reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
+                    evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                )
+                agent_actions.append(self._decision_action(
+                    "Remediation Specialist", "PROPOSE_REMEDIATION",
+                    f"Deterministic fallback: proposing correction for all {len(all_diffs)} confirmed findings.",
+                    evidence, is_gemini=False, fallback_reason=reason,
+                ))
+
+            rem_prop = self.remediation_service.generate_remediation_proposal(left_pkg, right_pkg, target_diffs)
             result.remediation = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
                 data=rem_prop,
             )
 
+            # Real Gemini decision point: select targeted (previously-mismatched)
+            # and regression (control) scenario ids to rerun deterministically
+            # against the patched candidate before revalidation.
+            targeted_ids: list[str] = [e.experiment_id for e in experiments_list if not e.matches]
+            control_ids = [
+                sc.id for sc in (test_plan.candidate_scenarios if test_plan is not None else [])
+                if sc.classification == ScenarioClassification.CONTROL
+            ]
+            regression_ids: list[str] = control_ids[:MAX_REGRESSION_TESTS]
+
+            if test_plan is not None and (targeted_ids or control_ids):
+                if self._is_cancelled(mission.mission_id, cancellation_check):
+                    return self._finalize_cancelled(mission, result, agent_actions)
+
+                decision2, evidence2 = self._ask_gemini(
+                    mission.mission_id, budget, "SELECT_REVALIDATION_TESTS", RemediationRevalidationSelectionDecision,
+                    system_instruction=(
+                        "You are the RateGuard Assurance Supervisor selecting which previously-mismatched "
+                        "(targeted) and control (regression) scenario ids to rerun deterministically against "
+                        "the proposed remediation patch. Only select ids from the provided lists."
+                    ),
+                    prompt=(
+                        f"Previously-mismatched scenario ids (targeted candidates): {targeted_ids}\n"
+                        f"Control scenario ids (regression candidates): {control_ids}"
+                    ),
+                )
+                if decision2 is not None:
+                    valid_targeted = set(targeted_ids)
+                    valid_control = set(control_ids)
+                    chosen_targeted = [i for i in decision2.targeted_test_ids if i in valid_targeted] or targeted_ids
+                    chosen_regression = [i for i in decision2.regression_test_ids if i in valid_control] or regression_ids
+                    targeted_ids, regression_ids = chosen_targeted, chosen_regression
+                    agent_actions.append(self._decision_action(
+                        "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
+                        f"Gemini selected {len(targeted_ids)} targeted and {len(regression_ids)} regression scenarios for revalidation.",
+                        evidence2, is_gemini=True, needs_human_review=decision2.needs_human_review,
+                    ))
+                else:
+                    reason = evidence2.failure_category if evidence2 else "CALL_BUDGET_EXHAUSTED"
+                    agent_actions.append(self._decision_action(
+                        "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
+                        f"Deterministic fallback: rerunning all {len(targeted_ids)} mismatched and {len(regression_ids)} control scenarios.",
+                        evidence2, is_gemini=False, fallback_reason=reason,
+                    ))
+
             # Execute Revalidation
             reval_res = self.remediation_service.revalidate_remediation(
-                left_pkg, right_pkg, rem_prop, mission.objective.portfolio_dataset
+                left_pkg, right_pkg, rem_prop, mission.objective.portfolio_dataset,
+                scenario_pool=test_plan.candidate_scenarios if test_plan is not None else None,
+                targeted_scenario_ids=targeted_ids,
+                regression_scenario_ids=regression_ids,
             )
             result.revalidation = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
@@ -592,6 +1232,14 @@ class AssuranceSupervisor:
         if sem_diffs:
             blocking_reasons.append(f"{len(sem_diffs)} AST semantic differences identified.")
 
+        # Never issue PASS unless the mandatory deterministic evidence for this
+        # mission's mode actually exists — a Gemini outage or a skipped optional
+        # stage must never be able to manufacture a clean release decision.
+        if not self._mandatory_evidence_ok(result) and not blocking_reasons:
+            blocking_reasons.append(
+                "Mandatory deterministic evidence is incomplete; a PASS decision cannot be issued."
+            )
+
         if blocking_reasons:
             decision_status = "BLOCK_DEPLOYMENT"
             summary_msg = f"Deployment blocked due to {len(blocking_reasons)} critical pricing drift findings."
@@ -618,6 +1266,17 @@ class AssuranceSupervisor:
             status=AnalysisStatus.SUCCEEDED,
             data=agent_actions,
         )
+        result.evidence_refs = evidence_ids + budget.evidence_ids
+
+        # Honest final ai_runtime status: only ever claims a live invocation when
+        # at least one Gemini call in this mission actually succeeded.
+        if budget.any_gemini_success:
+            result.ai_runtime["model_status"] = AI_RUNTIME_LIVE_STATUS
+        elif budget.any_gemini_attempted:
+            result.ai_runtime["model_status"] = AI_RUNTIME_FALLBACK_STATUS
+        else:
+            result.ai_runtime["model_status"] = AI_RUNTIME_NOT_INVOKED_STATUS
+        result.ai_runtime["gemini_calls_made"] = str(budget.gemini_call_count)
 
         self._update_mission_record(mission, result, agent_actions)
         return result

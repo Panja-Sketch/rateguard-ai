@@ -72,7 +72,10 @@ class AssuranceResultV2(BaseModel):
     ai_runtime: dict[str, str] = Field(
         default_factory=lambda: {
             "model_id": "gemini-3.7-flash",
-            "framework": "Google ADK",
+            # Names the framework that actually executes structured decisions
+            # (google-genai structured function-calling). Must never say "Google
+            # ADK" unless the deployed execution path genuinely runs through it.
+            "framework": "Google GenAI SDK (google-genai structured output)",
             # Honest default: no live Gemini invocation has occurred until a caller
             # explicitly overrides this with real invocation evidence.
             "model_status": "NOT_INVOKED_DETERMINISTIC_PIPELINE",

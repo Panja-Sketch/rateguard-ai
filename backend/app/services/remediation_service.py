@@ -4,7 +4,9 @@ from decimal import Decimal
 from typing import Any
 
 from app.engines.diff import SemanticDiffEngine
+from app.engines.oracle.calculator import PremiumOracleCalculator
 from app.engines.portfolio import PortfolioExposureAnalyzer
+from app.engines.testing.models import PricingTestScenario
 from app.ipir.package import IPIRPackage
 from app.models.mission import (
     MaterialFinding,
@@ -55,8 +57,18 @@ class RemediationService:
         defective_pkg: IPIRPackage,
         proposal: RemediationProposal,
         portfolio_csv: str = "az_ho3_2026_synthetic_50k.csv",
+        scenario_pool: list[PricingTestScenario] | None = None,
+        targeted_scenario_ids: list[str] | None = None,
+        regression_scenario_ids: list[str] | None = None,
     ) -> RevalidationResult:
-        """Re-executes portfolio exposure analysis using the patched target package to calculate before vs after financial exposure."""
+        """Re-executes portfolio exposure analysis using the patched target package to
+        calculate before vs after financial exposure, and deterministically reruns any
+        targeted (previously-mismatched) and regression (control) scenario IDs against
+        the patched package via the same PremiumOracleCalculator used everywhere else.
+
+        The original source/target packages are never mutated: `patched_pkg` is an
+        isolated in-memory clone of the intent package under a new derived ID.
+        """
         # Create patched target package in-memory by cloning intent package
         patched_pkg = deepcopy(intent_pkg)
         patched_pkg.id = proposal.derived_package_id
@@ -85,6 +97,12 @@ class RemediationService:
 
         new_decision = "PASS" if after_eval.financially_affected_count == 0 else "BLOCK_DEPLOYMENT"
 
+        targeted_rerun, targeted_passed, regression_rerun, regression_passed = (
+            self._rerun_scenarios(
+                intent_pkg, patched_pkg, scenario_pool, targeted_scenario_ids, regression_scenario_ids
+            )
+        )
+
         return RevalidationResult(
             revalidation_id=f"REV-{uuid.uuid4().hex[:6].upper()}",
             remediation_id=proposal.remediation_id,
@@ -94,4 +112,40 @@ class RemediationService:
             after_affected_policies=after_eval.financially_affected_count,
             exposure_eliminated_pct=round(eliminated_pct, 2),
             new_release_decision=new_decision,
+            targeted_tests_rerun=targeted_rerun,
+            targeted_tests_passed=targeted_passed,
+            regression_tests_rerun=regression_rerun,
+            regression_tests_passed=regression_passed,
         )
+
+    def _rerun_scenarios(
+        self,
+        intent_pkg: IPIRPackage,
+        patched_pkg: IPIRPackage,
+        scenario_pool: list[PricingTestScenario] | None,
+        targeted_ids: list[str] | None,
+        regression_ids: list[str] | None,
+    ) -> tuple[int, int, int, int]:
+        if not scenario_pool or not (targeted_ids or regression_ids):
+            return 0, 0, 0, 0
+
+        by_id = {sc.id: sc for sc in scenario_pool}
+        intent_oracle = PremiumOracleCalculator(intent_pkg)
+        patched_oracle = PremiumOracleCalculator(patched_pkg)
+
+        def _rerun(ids: list[str] | None) -> tuple[int, int]:
+            rerun = passed = 0
+            for scenario_id in ids or []:
+                scenario = by_id.get(scenario_id)
+                if scenario is None:
+                    continue
+                expected = intent_oracle.calculate_policy_premium(scenario.risk_values).final_premium
+                actual = patched_oracle.calculate_policy_premium(scenario.risk_values).final_premium
+                rerun += 1
+                if expected == actual:
+                    passed += 1
+            return rerun, passed
+
+        targeted_rerun, targeted_passed = _rerun(targeted_ids)
+        regression_rerun, regression_passed = _rerun(regression_ids)
+        return targeted_rerun, targeted_passed, regression_rerun, regression_passed

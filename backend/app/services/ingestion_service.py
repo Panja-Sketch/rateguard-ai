@@ -1,17 +1,27 @@
+import hashlib
 import uuid
 from typing import Any
 
-from app.adapters import AdapterResult, SourceDescriptor, SourceFormat, get_adapter_registry
+from app.adapters import AdapterResult, SourceDescriptor, SourceFormat
 from app.adapters.errors import SourceParsingError
+from app.agents.supervisor import AssuranceSupervisor
+from app.storage import get_run_store
 from app.storage.artifacts import ArtifactCategory, ArtifactDescriptor, get_artifact_store
 
 
 class PricingSourceIngestionService:
-    """Service orchestrating source upload, storage, compilation, and IPIR lineage."""
+    """Service orchestrating source upload, storage, compilation, and IPIR lineage.
+
+    Compilation is delegated to `AssuranceSupervisor.extract_and_compile_source`
+    rather than calling an adapter directly, so every source — regardless of
+    whether a mission exists yet — goes through the same mandatory hash/
+    provenance capture, extractor-selection (deterministic-first, Gemini only
+    for genuinely ambiguous PDF/Excel sources), and IPIR schema validation.
+    """
 
     def __init__(self) -> None:
         self.artifact_store = get_artifact_store()
-        self.registry = get_adapter_registry()
+        self.supervisor = AssuranceSupervisor(get_run_store())
 
     def register_source(
         self,
@@ -40,6 +50,9 @@ class PricingSourceIngestionService:
             )
 
         source_id = f"SRC-{uuid.uuid4().hex[:8].upper()}"
+        sha256_hash = hashlib.sha256(content).hexdigest()
+        full_metadata = {**(metadata or {}), "sha256": sha256_hash}
+
         art_desc = ArtifactDescriptor(
             artifact_id=source_id,
             category=cat,
@@ -47,7 +60,7 @@ class PricingSourceIngestionService:
             content_type=content_type or "application/octet-stream",
             size_bytes=len(content),
             storage_uri="",
-            metadata=metadata or {},
+            metadata=full_metadata,
         )
         saved_desc = self.artifact_store.save_artifact(art_desc, content)
 
@@ -57,19 +70,20 @@ class PricingSourceIngestionService:
             source_type=fmt,
             format=ext,
             storage_uri=saved_desc.storage_uri,
-            metadata=metadata or {},
+            metadata=full_metadata,
         )
 
     def compile_source(self, source_descriptor: SourceDescriptor) -> AdapterResult:
-        """Selects adapter, compiles source bytes to IPIR, and saves compiled IPIR artifact."""
+        """Compiles registered source bytes to IPIR via the mandatory
+        `AssuranceSupervisor.extract_and_compile_source` pipeline, then saves
+        the compiled IPIR artifact."""
         content = self.artifact_store.get_artifact_content(source_descriptor.source_id)
         if not content:
             raise SourceParsingError(
                 f"Artifact content for source '{source_descriptor.source_id}' not found."
             )
 
-        adapter = self.registry.get_adapter(source_descriptor.source_type)
-        result = adapter.to_ipir(source_descriptor, content)
+        result = self.supervisor.extract_and_compile_source(source_descriptor, content)
 
         # Save compiled IPIR artifact
         ipir_json = result.ipir_package.model_dump_json(indent=2).encode("utf-8")

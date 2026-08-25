@@ -90,7 +90,15 @@ class AgentAction(BaseModel):
     rationale: str | None = None
     selected_tool: str | None = None
     latency_ms: float = 0.0
-    model_id: str = "gemini-3.7-flash"
+    # `model_id` MUST stay None unless this specific action is backed by a real,
+    # completed Gemini invocation — never stamp a model onto a deterministic step.
+    model_id: str | None = None
+    invocation_id: str | None = None
+    decision_type: str | None = None
+    is_gemini_decision: bool = False
+    is_fallback: bool = False
+    fallback_reason: str | None = None
+    needs_human_review: bool = False
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -174,6 +182,10 @@ class RevalidationResult(BaseModel):
     after_affected_policies: int
     exposure_eliminated_pct: float
     new_release_decision: str
+    targeted_tests_rerun: int = 0
+    targeted_tests_passed: int = 0
+    regression_tests_rerun: int = 0
+    regression_tests_passed: int = 0
 
 
 class ReleaseDecision(BaseModel):

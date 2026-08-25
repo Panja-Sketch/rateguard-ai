@@ -54,7 +54,15 @@ export interface AgentAction {
   rationale?: string;
   selected_tool?: string;
   latency_ms: number;
-  model_id: string;
+  // Only set when this specific action is backed by a real, completed Gemini
+  // invocation — never a hardcoded/default claim.
+  model_id?: string | null;
+  invocation_id?: string | null;
+  decision_type?: string | null;
+  is_gemini_decision?: boolean;
+  is_fallback?: boolean;
+  fallback_reason?: string | null;
+  needs_human_review?: boolean;
   timestamp: string;
 }
 
@@ -194,6 +202,10 @@ export interface RevalidationResult {
   after_affected_policies: number;
   exposure_eliminated_pct: number;
   new_release_decision: string;
+  targeted_tests_rerun?: number;
+  targeted_tests_passed?: number;
+  regression_tests_rerun?: number;
+  regression_tests_passed?: number;
 }
 
 export interface ReleaseDecision {
