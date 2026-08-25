@@ -248,11 +248,16 @@ deploy_candidate() {
     --allow-unauthenticated --service-account "$RUNTIME_SA" \
     --memory=512Mi --env-vars-file="$CANDIDATE_ENV_FILE"
 
+  # Reliable tagged-URL discovery: read the actual traffic entry rather than
+  # fabricating a plausible-looking URL by string-substituting the tag prefix
+  # into the untagged URL (the previous fallback here could silently produce
+  # a URL that was never actually deployed). A missing candidate URL stops
+  # the script before any Pub/Sub or frontend step runs.
   CANDIDATE_API_URL=$(gcloud run services describe rateguard-api --region "$REGION" \
-    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)" 2>/dev/null || true)
+    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)")
   if [ -z "$CANDIDATE_API_URL" ]; then
-    CANDIDATE_API_URL=$(gcloud run services describe rateguard-api --region "$REGION" \
-      --format "value(status.address.url)" | sed "s#://#://${CANDIDATE_TAG}---#")
+    echo "Error: could not discover the candidate-tagged URL for rateguard-api. Refusing to fabricate one. Stopping before any Pub/Sub or frontend step." >&2
+    exit 1
   fi
   echo "   Candidate API URL: ${CANDIDATE_API_URL}"
 
@@ -264,12 +269,22 @@ deploy_candidate() {
     --memory=1Gi --env-vars-file="$CANDIDATE_ENV_FILE"
 
   CANDIDATE_WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" \
-    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)" 2>/dev/null || true)
+    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)")
   if [ -z "$CANDIDATE_WORKER_URL" ]; then
-    CANDIDATE_WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" \
-      --format "value(status.address.url)" | sed "s#://#://${CANDIDATE_TAG}---#")
+    echo "Error: could not discover the candidate-tagged URL for rateguard-worker. Refusing to fabricate one. Stopping before any Pub/Sub or frontend step." >&2
+    exit 1
   fi
   echo "   Candidate Worker URL: ${CANDIDATE_WORKER_URL}"
+
+  # The untagged (base) worker service URL is required separately: Cloud Run
+  # requires the OIDC push-auth token audience to be the plain service URL
+  # even when the push endpoint itself targets a specific traffic tag.
+  CANDIDATE_WORKER_UNTAGGED_URL=$(gcloud run services describe rateguard-worker --region "$REGION" \
+    --format "value(status.url)")
+  if [ -z "$CANDIDATE_WORKER_UNTAGGED_URL" ]; then
+    echo "Error: could not discover the untagged rateguard-worker service URL (needed as the Pub/Sub OIDC audience). Stopping." >&2
+    exit 1
+  fi
 
   echo "4. Idempotently configuring isolated staging Pub/Sub + DLQ..."
   if ! gcloud pubsub topics describe "$STAGING_TOPIC" >/dev/null 2>&1; then
@@ -287,7 +302,8 @@ deploy_candidate() {
       --dead-letter-topic="$STAGING_DLQ_TOPIC" \
       --max-delivery-attempts="$MAX_DELIVERY_ATTEMPTS" \
       --push-endpoint="${CANDIDATE_WORKER_URL}/internal/pubsub/assurance" \
-      --push-auth-service-account="$PUBSUB_PUSH_SA"
+      --push-auth-service-account="$PUBSUB_PUSH_SA" \
+      --push-auth-token-audience="$CANDIDATE_WORKER_UNTAGGED_URL"
   else
     gcloud pubsub subscriptions update "$STAGING_SUBSCRIPTION" \
       --ack-deadline="$ACK_DEADLINE_SECONDS" \
@@ -297,7 +313,8 @@ deploy_candidate() {
       --max-delivery-attempts="$MAX_DELIVERY_ATTEMPTS"
     gcloud pubsub subscriptions modify-push-config "$STAGING_SUBSCRIPTION" \
       --push-endpoint="${CANDIDATE_WORKER_URL}/internal/pubsub/assurance" \
-      --push-auth-service-account="$PUBSUB_PUSH_SA"
+      --push-auth-service-account="$PUBSUB_PUSH_SA" \
+      --push-auth-token-audience="$CANDIDATE_WORKER_UNTAGGED_URL"
   fi
   if ! gcloud pubsub subscriptions describe "$STAGING_DLQ_INSPECTION_SUBSCRIPTION" >/dev/null 2>&1; then
     gcloud pubsub subscriptions create "$STAGING_DLQ_INSPECTION_SUBSCRIPTION" --topic="$STAGING_DLQ_TOPIC"
