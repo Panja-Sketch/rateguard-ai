@@ -1,13 +1,15 @@
 import logging
-from typing import Any
 
 from app.agents.runner import AgenticAssuranceRunner
 from app.ipir.package import IPIRPackage
 from app.messaging.models import AssuranceJob
+from app.messaging.outcomes import ProcessingOutcome, ProcessingResult, safe_error_text
 from app.services.ingestion_service import PricingSourceIngestionService
 from app.storage import AssuranceRunRecord, AssuranceRunStatus, BaseRunStore, get_run_store
 
 logger = logging.getLogger(__name__)
+
+_LEGACY_TERMINAL_STATUSES = ("COMPLETED", "FAILED", "NEEDS_REVIEW", "CANCELLED", "ARCHIVED")
 
 
 class AssuranceWorker:
@@ -19,11 +21,16 @@ class AssuranceWorker:
         runner: AgenticAssuranceRunner | None = None,
         ingestion_service: PricingSourceIngestionService | None = None,
     ) -> None:
-        self.run_store = run_store or get_run_store()
+        # `strict=True`: a Firestore failure must raise here, not silently fall
+        # back to an empty in-memory store and be misread as "run not found" —
+        # see `app.messaging.outcomes` / `app.storage.get_run_store` for the
+        # full rationale (this exact silent-fallback pattern caused missions
+        # to be stuck in QUEUED forever after a transient Firestore outage).
+        self.run_store = run_store or get_run_store(strict=True)
         self.runner = runner or AgenticAssuranceRunner()
         self.ingestion_service = ingestion_service or PricingSourceIngestionService()
 
-    def process_job(self, job: AssuranceJob) -> dict[str, Any]:
+    def process_job(self, job: AssuranceJob) -> ProcessingResult:
         """Processes an assurance job with strict idempotency and event timeline tracking.
 
         The `run_id` ID scheme (`MIS-*` vs anything else) is the authoritative,
@@ -35,6 +42,10 @@ class AssuranceWorker:
         explicitly (not silently) routed to the legacy handler, regardless of its
         job_type value, since legacy jobs are not guaranteed to carry a job_type
         distinct from the schema default.
+
+        Always returns a `ProcessingResult` — never raises for an expected
+        failure class. `worker_endpoint.py` maps the outcome to an HTTP status;
+        it must never be converted into an unconditional 200.
         """
         is_v2_run_id = job.run_id.startswith("MIS-")
 
@@ -55,16 +66,14 @@ class AssuranceWorker:
                     job.run_id,
                     job.job_type,
                 )
-                return {
-                    "status": "FAILED",
-                    "job_id": job.job_id,
-                    "run_id": job.run_id,
-                    "error": "JOB_ROUTING_MISMATCH",
-                    "detail": (
-                        f"run_id '{job.run_id}' has the MIS- prefix but job_type="
-                        f"'{job.job_type}' — expected 'ASSURANCE_MISSION_V2'."
-                    ),
-                }
+                # A structurally wrong job_type will never become correct by
+                # retrying the identical message — this is a poison envelope.
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.TERMINAL_INVALID_MESSAGE,
+                    run_id=job.run_id,
+                    job_id=job.job_id,
+                    detail="JOB_ROUTING_MISMATCH: MIS- run_id with unexpected job_type.",
+                )
 
             from app.services.mission_execution_service import MissionExecutionService
 
@@ -77,32 +86,62 @@ class AssuranceWorker:
         )
         return self._process_legacy_job(job)
 
-    def _process_legacy_job(self, job: AssuranceJob) -> dict[str, Any]:
+    def _process_legacy_job(self, job: AssuranceJob) -> ProcessingResult:
         """Handles legacy RUN-* jobs for backward compatibility."""
         run_id = job.run_id
-        record = self.run_store.get_run(run_id)
 
-        if not record:
-            record = AssuranceRunRecord(
-                run_id=run_id,
-                status=AssuranceRunStatus.QUEUED,
-                workflow_stage="QUEUED",
-                metadata={"job_id": job.job_id},
+        try:
+            record = self.run_store.get_run(run_id)
+            if not record:
+                record = AssuranceRunRecord(
+                    run_id=run_id,
+                    status=AssuranceRunStatus.QUEUED,
+                    workflow_stage="QUEUED",
+                    metadata={"job_id": job.job_id},
+                )
+                self.run_store.save_run(record)
+        except Exception as exc:
+            logger.error(
+                "STORAGE_UNAVAILABLE: legacy get/save_run failed for run '%s': %s",
+                run_id, safe_error_text(exc),
             )
-            self.run_store.save_run(record)
+            return ProcessingResult(
+                outcome=ProcessingOutcome.RETRYABLE_FAILURE, run_id=run_id, job_id=job.job_id,
+                detail="Storage layer unavailable while loading legacy run.",
+                status_write_ok=False,
+            )
 
         status_str = record.status.value if hasattr(record.status, "value") else str(record.status)
 
-        if status_str in ("COMPLETED", "FAILED", "NEEDS_REVIEW", "CANCELLED", "ARCHIVED"):
-            logger.info("Legacy Run '%s' is already in terminal status '%s'. Skipping job '%s'.", run_id, status_str, job.job_id)
-            res_status = "SKIPPED_ALREADY_COMPLETED" if status_str == "COMPLETED" else "SKIPPED_ALREADY_TERMINAL"
-            return {"status": res_status, "run_id": run_id}
+        if status_str in _LEGACY_TERMINAL_STATUSES:
+            logger.info(
+                "Legacy Run '%s' is already in terminal status '%s'. Skipping job '%s'.",
+                run_id, status_str, job.job_id,
+            )
+            if status_str == "CANCELLED":
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.CANCELLED, run_id=run_id, job_id=job.job_id,
+                    detail="Run already CANCELLED.",
+                )
+            return ProcessingResult(
+                outcome=ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED, run_id=run_id, job_id=job.job_id,
+                detail=f"Run already in terminal status '{status_str}'.",
+            )
 
-        self.run_store.update_run_status(
-            run_id=run_id,
-            status=AssuranceRunStatus.PROCESSING,
-            workflow_stage="RUNNING",
-        )
+        try:
+            self.run_store.update_run_status(
+                run_id=run_id, status=AssuranceRunStatus.PROCESSING, workflow_stage="RUNNING",
+            )
+        except Exception as exc:
+            logger.error(
+                "STORAGE_UNAVAILABLE: failed to mark legacy run '%s' PROCESSING: %s",
+                run_id, safe_error_text(exc),
+            )
+            return ProcessingResult(
+                outcome=ProcessingOutcome.RETRYABLE_FAILURE, run_id=run_id, job_id=job.job_id,
+                detail="Storage layer unavailable while acquiring legacy run.",
+                status_write_ok=False,
+            )
 
         try:
             canonical_pkg: IPIRPackage | None = None
@@ -157,25 +196,29 @@ class AssuranceWorker:
                 message=f"Legacy Assurance Run COMPLETED with decision [{report.status}].",
             )
 
-            return {
-                "status": "COMPLETED",
-                "run_id": run_id,
-                "decision": report.status,
-            }
+            return ProcessingResult(
+                outcome=ProcessingOutcome.SUCCEEDED, run_id=run_id, job_id=job.job_id, decision=report.status,
+            )
 
         except Exception as e:
             logger.exception("Legacy assurance worker failed for run '%s': %s", run_id, e)
-            error_msg = f"Assurance Worker Failure: {e}"
+            status_write_ok = False
+            try:
+                self.run_store.update_run_status(
+                    run_id=run_id,
+                    status=AssuranceRunStatus.FAILED,
+                    workflow_stage="FAILED",
+                    summary=f"Assurance Worker Failure: {safe_error_text(e)}",
+                )
+                status_write_ok = True
+            except Exception as store_exc:
+                logger.error(
+                    "STORAGE_DEGRADED: failed to persist FAILED status for legacy run '%s': %s",
+                    run_id, safe_error_text(store_exc),
+                )
 
-            self.run_store.update_run_status(
-                run_id=run_id,
-                status=AssuranceRunStatus.FAILED,
-                workflow_stage="FAILED",
-                summary=error_msg,
+            return ProcessingResult(
+                outcome=ProcessingOutcome.RETRYABLE_FAILURE, run_id=run_id, job_id=job.job_id,
+                detail="Legacy assurance worker raised an unexpected exception.",
+                status_write_ok=status_write_ok,
             )
-
-            return {
-                "status": "FAILED",
-                "run_id": run_id,
-                "error": str(e),
-            }

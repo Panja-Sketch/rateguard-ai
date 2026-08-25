@@ -26,6 +26,17 @@ dependencies = [
     "google-cloud-bigquery>=3.18.0",
     "google-cloud-pubsub>=2.19.0",
     "reportlab>=4.1.0",
+    # Pinned transitive dependency, not used directly by our code. Required by
+    # google-cloud-firestore and google-cloud-pubsub. google-api-core==2.35.0 has
+    # a confirmed regression that percent-encodes the literal Firestore database
+    # id "(default)" into "%28default%29", which Firestore's API then rejects
+    # with "400 Invalid database id %28default%29" on every request. 2.34.0 is
+    # confirmed working with google-genai==2.19.0 and google-cloud-firestore in
+    # this repo. Remove this pin only after verifying a released google-api-core
+    # version that has fixed the regression (upstream tracking: the "(default)"
+    # database id itself is valid — this is a client-library encoding bug, not
+    # an invalid value).
+    "google-api-core==2.34.0",
 ]
 
 [project.optional-dependencies]

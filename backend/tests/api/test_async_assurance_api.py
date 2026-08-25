@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.messaging import AssuranceJob
+from app.messaging.outcomes import ProcessingOutcome
 
 client = TestClient(app)
 
@@ -67,10 +68,12 @@ def test_internal_pubsub_worker_endpoint():
     assert res.status_code == 200
 
     data = res.json()
-    assert data["status"] == "ACKNOWLEDGED"
+    assert data["status"] in (
+        ProcessingOutcome.SUCCEEDED.value,
+        ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED.value,
+    )
     assert data["job_id"] == "JOB-TEST-001"
     assert data["run_id"] == "RUN-TEST-001"
-    assert data["result"]["status"] in ("COMPLETED", "SKIPPED_ALREADY_COMPLETED")
 
 
 def test_unknown_assurance_run_404():

@@ -7,6 +7,7 @@ from app.messaging import (
     PubSubPublisher,
     get_message_publisher,
 )
+from app.messaging.outcomes import ProcessingOutcome, ProcessingResult
 from app.storage import AssuranceRunRecord, AssuranceRunStatus, InMemoryRunStore
 
 
@@ -74,8 +75,9 @@ def test_assurance_worker_execution():
 
     res = worker.process_job(job)
 
-    assert res["status"] == "COMPLETED"
-    assert res["decision"] == "BLOCK_DEPLOYMENT"
+    assert res.outcome == ProcessingOutcome.SUCCEEDED
+    assert res.decision == "BLOCK_DEPLOYMENT"
+    assert res.should_ack is True
 
     run_record = store.get_run("RUN-100")
     assert run_record is not None
@@ -103,7 +105,8 @@ def test_assurance_worker_idempotency_skips_completed():
 
     res = worker.process_job(job)
 
-    assert res["status"] == "SKIPPED_ALREADY_COMPLETED"
+    assert res.outcome == ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED
+    assert res.should_ack is True
     assert not runner.run_assurance.called
 
 
@@ -125,7 +128,8 @@ def test_worker_routes_legacy_run_id_to_legacy_handler_regardless_of_job_type():
 
     res = worker.process_job(job)
 
-    assert res["status"] == "COMPLETED"
+    assert res.outcome == ProcessingOutcome.SUCCEEDED
+    assert res.should_ack is True
     assert runner.run_assurance.called
 
 
@@ -141,8 +145,9 @@ def test_worker_rejects_mission_v2_id_with_mismatched_job_type():
 
     res = worker.process_job(job)
 
-    assert res["status"] == "FAILED"
-    assert res["error"] == "JOB_ROUTING_MISMATCH"
+    assert res.outcome == ProcessingOutcome.TERMINAL_INVALID_MESSAGE
+    assert res.should_ack is False
+    assert "JOB_ROUTING_MISMATCH" in res.detail
 
 
 def test_worker_dispatches_mission_v2_id_with_matching_job_type():
@@ -153,11 +158,13 @@ def test_worker_dispatches_mission_v2_id_with_matching_job_type():
     job = AssuranceJob(job_id="JOB-MATCH-1", run_id="MIS-MATCH-1", job_type="ASSURANCE_MISSION_V2")
 
     with patch("app.services.mission_execution_service.MissionExecutionService.execute_job") as mock_exec:
-        mock_exec.return_value = {"status": "RUNNING", "mission_id": "MIS-MATCH-1"}
+        mock_exec.return_value = ProcessingResult(
+            outcome=ProcessingOutcome.SUCCEEDED, run_id="MIS-MATCH-1",
+        )
         res = worker.process_job(job)
 
     mock_exec.assert_called_once_with(job)
-    assert res["status"] == "RUNNING"
+    assert res.outcome == ProcessingOutcome.SUCCEEDED
 
 
 def test_factory_returns_memory_publisher_when_local():

@@ -77,3 +77,8 @@ client_secret*.json
 .DS_Store
 Thumbs.db
 
+# Reproducible local artifact-store output (LocalArtifactStore writes here
+# whenever GCS is unavailable or RATEGUARD_ARTIFACT_STORE is unset in local
+# dev/test runs) -- regenerated on demand, not meaningful source content.
+data/artifacts/
+

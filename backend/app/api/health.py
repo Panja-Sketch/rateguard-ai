@@ -51,22 +51,28 @@ def _check_run_store() -> dict[str, Any]:
     try:
         from app.storage import get_run_store
 
-        store = get_run_store()
+        # Deliberately the STRICT store (fallback_on_error=False) here, not the
+        # lenient default: the lenient store's list_runs() catches every
+        # Firestore exception internally and falls back to an empty in-memory
+        # store, so it can never actually observe (and this readiness check
+        # could never report) a real outage where the client initialized but
+        # every RPC fails -- exactly what the historical "400 Invalid database
+        # id %28default%29" incident looked like. A cheap, single, non-mutating
+        # list_runs(limit=1) call is the minimal operation that proves
+        # end-to-end reachability.
+        store = get_run_store(strict=True)
         store_kind = type(store).__name__
-
-        # A cheap, non-mutating reachability probe with an implicit short timeout:
-        # list_runs(limit=1) already has its own try/except-with-fallback inside
-        # FirestoreRunStore, so this never blocks long or raises for a real outage.
-        store.list_runs(limit=1)
 
         db = getattr(store, "_db", "n/a")
         if store_kind == "FirestoreRunStore" and db is None:
             return {
                 "status": "degraded",
-                "detail": "FirestoreRunStore configured but Firestore client unavailable; "
-                "falling back to in-memory store (not durable across instances).",
+                "detail": "FirestoreRunStore configured but Firestore client failed to "
+                "initialize.",
                 "backend": store_kind,
             }
+
+        store.list_runs(limit=1)
         return {"status": "ok", "backend": store_kind}
     except Exception as e:
         return {"status": "degraded", "detail": f"Run store check failed: {e}"}

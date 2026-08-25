@@ -109,6 +109,89 @@ gcloud run services add-iam-policy-binding rateguard-worker \
   --member="serviceAccount:$PUBSUB_PUSH_SA" \
   --role="roles/run.invoker" >/dev/null
 
+# 4b. Idempotent Pub/Sub Topic, Subscription, and Dead-Letter Queue Setup
+#
+# Ack deadline / worker timeout alignment: rateguard-worker's Cloud Run
+# request timeout is 300s (this script does not change that in this pass).
+# Pub/Sub's push-subscription ack deadline caps at 600s — the hard platform
+# maximum — which is what ACK_DEADLINE_SECONDS is set to below specifically
+# so it always exceeds the worker's request timeout with a safe buffer (a
+# full 300s / 2x margin today). A mission whose synchronous processing
+# legitimately takes longer than the ack deadline would otherwise be
+# redelivered by Pub/Sub mid-flight even though the worker is still correctly
+# working on it. Duplicate delivery is still possible regardless of this
+# alignment (Pub/Sub is at-least-once by design) — that is exactly why the
+# MissionExecutionService atomic lease/idempotency protection
+# (backend/app/services/mission_execution_service.py) must remain in place;
+# it is the real correctness guarantee, this timing alignment only reduces
+# how often it gets exercised.
+ACK_DEADLINE_SECONDS=600
+MIN_RETRY_BACKOFF_SECONDS=10
+MAX_RETRY_BACKOFF_SECONDS=600
+MAX_DELIVERY_ATTEMPTS=5
+DLQ_TOPIC="assurance-runs-dlq"
+DLQ_INSPECTION_SUBSCRIPTION="assurance-runs-dlq-inspect"
+
+echo "\n4b. Verifying Pub/Sub topic/subscription/dead-letter-queue configuration..."
+
+if ! gcloud pubsub topics describe assurance-runs >/dev/null 2>&1; then
+  echo "   Creating Pub/Sub topic 'assurance-runs'..."
+  gcloud pubsub topics create assurance-runs
+else
+  echo "   Pub/Sub topic 'assurance-runs' exists."
+fi
+
+if ! gcloud pubsub topics describe "$DLQ_TOPIC" >/dev/null 2>&1; then
+  echo "   Creating dead-letter topic '$DLQ_TOPIC'..."
+  gcloud pubsub topics create "$DLQ_TOPIC"
+else
+  echo "   Dead-letter topic '$DLQ_TOPIC' exists."
+fi
+
+if ! gcloud pubsub subscriptions describe assurance-worker >/dev/null 2>&1; then
+  echo "   Creating Pub/Sub subscription 'assurance-worker' (push endpoint configured in step 5)..."
+  gcloud pubsub subscriptions create assurance-worker \
+    --topic=assurance-runs \
+    --ack-deadline="$ACK_DEADLINE_SECONDS" \
+    --min-retry-delay="${MIN_RETRY_BACKOFF_SECONDS}s" \
+    --max-retry-delay="${MAX_RETRY_BACKOFF_SECONDS}s" \
+    --dead-letter-topic="$DLQ_TOPIC" \
+    --max-delivery-attempts="$MAX_DELIVERY_ATTEMPTS"
+else
+  echo "   Pub/Sub subscription 'assurance-worker' exists; reapplying timing/retry/dead-letter configuration (idempotent update)..."
+  gcloud pubsub subscriptions update assurance-worker \
+    --ack-deadline="$ACK_DEADLINE_SECONDS" \
+    --min-retry-delay="${MIN_RETRY_BACKOFF_SECONDS}s" \
+    --max-retry-delay="${MAX_RETRY_BACKOFF_SECONDS}s" \
+    --dead-letter-topic="$DLQ_TOPIC" \
+    --max-delivery-attempts="$MAX_DELIVERY_ATTEMPTS"
+fi
+
+# Pull-based inspection subscription on the DLQ topic so a poison message can
+# be manually pulled and examined rather than only ever silently retained.
+# Not consumed by any running service.
+if ! gcloud pubsub subscriptions describe "$DLQ_INSPECTION_SUBSCRIPTION" >/dev/null 2>&1; then
+  echo "   Creating dead-letter inspection subscription '$DLQ_INSPECTION_SUBSCRIPTION'..."
+  gcloud pubsub subscriptions create "$DLQ_INSPECTION_SUBSCRIPTION" \
+    --topic="$DLQ_TOPIC"
+else
+  echo "   Dead-letter inspection subscription '$DLQ_INSPECTION_SUBSCRIPTION' exists."
+fi
+
+# Narrowly-scoped grants required for Pub/Sub to forward undeliverable
+# messages to the dead-letter topic: the Pub/Sub service agent needs
+# publisher rights on the DLQ topic specifically (not project-wide), and
+# subscriber rights on the source subscription specifically. Both
+# `add-iam-policy-binding` calls are naturally idempotent (re-adding an
+# existing binding is a no-op, not an error).
+echo "   Granting narrowly-scoped dead-letter forwarding permissions to Pub/Sub Service Agent..."
+gcloud pubsub topics add-iam-policy-binding "$DLQ_TOPIC" \
+  --member="serviceAccount:$PUBSUB_SERVICE_AGENT" \
+  --role="roles/pubsub.publisher" >/dev/null
+gcloud pubsub subscriptions add-iam-policy-binding assurance-worker \
+  --member="serviceAccount:$PUBSUB_SERVICE_AGENT" \
+  --role="roles/pubsub.subscriber" >/dev/null
+
 # 5. Configure Pub/Sub Subscription Push to Private Worker Endpoint
 echo "\n5. Configuring Pub/Sub Subscription ('assurance-worker') Push to Private Worker..."
 gcloud pubsub subscriptions modify-push-config assurance-worker \

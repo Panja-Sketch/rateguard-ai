@@ -57,7 +57,15 @@ class FirestoreRunStore(BaseRunStore):
             from google.cloud import firestore
 
             kwargs: dict[str, Any] = {"project": project_id}
-            if database_id:
+            # Defensive normalization only — NOT the fix for the historical "400
+            # Invalid database id %28default%29" incident (that was a
+            # google-api-core==2.35.0 percent-encoding regression, fixed by the
+            # google-api-core==2.34.0 pin in pyproject.toml). "(default)" is a
+            # valid Firestore database id and passing it explicitly is normally
+            # fine; we simply avoid passing an explicit `database=` kwarg for
+            # the common "unset or default" case so the client library's own
+            # default-database resolution path is used instead of ours.
+            if database_id and database_id != "(default)":
                 kwargs["database"] = database_id
             self._db = firestore.Client(**kwargs)
             logger.info("Successfully initialized Firestore client for project '%s'", project_id)

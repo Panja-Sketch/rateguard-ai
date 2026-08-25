@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.messaging.models import AssuranceJob
+from app.messaging.outcomes import ProcessingOutcome
 from app.models.mission import (
     AssuranceMission,
     ComparisonMode,
@@ -141,7 +142,7 @@ def test_distributed_mission_execution_path():
     # 4. Worker processes envelope via /internal/pubsub/assurance endpoint
     pub_res = client.post("/internal/pubsub/assurance", json=envelope)
     assert pub_res.status_code == 200
-    assert pub_res.json()["status"] == "ACKNOWLEDGED"
+    assert pub_res.json()["status"] == ProcessingOutcome.SUCCEEDED.value
 
     # 5. Detail GET endpoint returns completed status and PASS decision
     get_res = client.get(f"/api/v1/missions/{mission_id}")
@@ -169,7 +170,8 @@ def test_execution_lease_skips_duplicate_delivery():
     store.save_run(rec)
 
     res = MissionExecutionService.execute_job(job)
-    assert res["status"] == "SKIPPED_ALREADY_COMPLETED"
+    assert res.outcome == ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED
+    assert res.should_ack is True
 
 
 def test_invalid_mission_creation_returns_422_without_enqueuing():
