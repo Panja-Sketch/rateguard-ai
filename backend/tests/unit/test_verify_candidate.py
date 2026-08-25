@@ -9,8 +9,10 @@ No network calls: verify_candidate._http is monkeypatched in every test.
 """
 
 import sys
+import urllib.error
+from email.message import Message
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -100,7 +102,9 @@ CANDIDATE_ORIGIN = "https://candidate---rateguard-web-iqofutwtva-uc.a.run.app"
 
 def _report_with_cors_responses(get_response: tuple, preflight_response: tuple) -> vc.Report:
     """get_response/preflight_response are (status_code, headers_dict) pairs,
-    matching what verify_candidate._http_with_origin returns."""
+    matching what verify_candidate._http_with_origin returns -- i.e. already
+    normalized to lowercase keys (see _normalize_headers), exactly as real
+    responses come back once _http_with_origin has processed them."""
     report = vc.Report()
     responses = iter([get_response, preflight_response])
     with patch.object(vc, "_http_with_origin", side_effect=lambda *a, **k: next(responses)):
@@ -112,8 +116,8 @@ def _report_with_cors_responses(get_response: tuple, preflight_response: tuple) 
 
 def test_cors_check_passes_when_both_get_and_preflight_allow_the_candidate_origin():
     report = _report_with_cors_responses(
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN}),
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN, "Access-Control-Allow-Methods": "GET, POST, OPTIONS"}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN, "access-control-allow-methods": "GET, POST, OPTIONS"}),
     )
     assert report.checks[-1].passed is True
 
@@ -126,7 +130,7 @@ def test_cors_check_fails_when_get_has_no_allow_origin_header():
     the candidate frontend's JS."""
     report = _report_with_cors_responses(
         (200, {}),
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN, "Access-Control-Allow-Methods": "GET, POST, OPTIONS"}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN, "access-control-allow-methods": "GET, POST, OPTIONS"}),
     )
     assert report.checks[-1].passed is False
 
@@ -135,7 +139,7 @@ def test_cors_check_fails_when_preflight_returns_400():
     """Regression: matches the exact bug-report symptom -- OPTIONS preflight
     for an unlisted origin returns HTTP 400 with no allow-origin header."""
     report = _report_with_cors_responses(
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN}),
         (400, {}),
     )
     assert report.checks[-1].passed is False
@@ -143,10 +147,148 @@ def test_cors_check_fails_when_preflight_returns_400():
 
 def test_cors_check_fails_when_preflight_does_not_allow_post():
     report = _report_with_cors_responses(
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN}),
-        (200, {"Access-Control-Allow-Origin": CANDIDATE_ORIGIN, "Access-Control-Allow-Methods": "GET"}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN}),
+        (200, {"access-control-allow-origin": CANDIDATE_ORIGIN, "access-control-allow-methods": "GET"}),
     )
     assert report.checks[-1].passed is False
+
+
+def test_cors_check_fails_when_allow_origin_is_a_wildcard_not_the_exact_origin():
+    """The check must require an EXACT match to the candidate origin, never
+    accept a wildcard as a stand-in -- a '*' allow-origin would also be
+    invalid per spec once credentials are involved, and must not be treated
+    as a pass here."""
+    report = _report_with_cors_responses(
+        (200, {"access-control-allow-origin": "*"}),
+        (200, {"access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS"}),
+    )
+    assert report.checks[-1].passed is False
+
+
+def _message_with_headers(headers: dict) -> Message:
+    """Builds an email.message.Message the way http.client.HTTPMessage (a
+    real response's .headers) looks after Cloud Run's Google Frontend has
+    already lowercased every header name over HTTP/2 (RFC 7540 §8.1.2) --
+    exactly the shape urllib hands back regardless of what case the origin
+    server used."""
+    msg = Message()
+    for name, value in headers.items():
+        msg[name] = value
+    return msg
+
+
+def _fake_context_manager_response(status: int, headers: Message) -> MagicMock:
+    resp = MagicMock()
+    resp.status = status
+    resp.headers = headers
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    return resp
+
+
+def test_normalize_headers_lowercases_google_frontend_style_header_names():
+    """Regression: Google Frontend/Cloud Run responses arrive with header
+    names already lowercased -- a plain dict(headers) preserves that
+    lowercase casing, so a lookup using the mixed-case spelling
+    "Access-Control-Allow-Origin" previously matched nothing and silently
+    produced a false negative (allow-origin=None) even though the header
+    was genuinely present on the wire, exactly as the bug report's curl
+    evidence showed."""
+    msg = _message_with_headers({
+        "access-control-allow-origin": CANDIDATE_ORIGIN,
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "access-control-allow-credentials": "true",
+    })
+    normalized = vc._normalize_headers(msg)
+    assert normalized["access-control-allow-origin"] == CANDIDATE_ORIGIN
+    assert normalized["access-control-allow-methods"] == "GET, POST, OPTIONS"
+    # Proves the dict itself uses lowercase keys (not that .get() elsewhere
+    # is doing case-insensitive work on our behalf).
+    assert "Access-Control-Allow-Origin" not in normalized
+
+
+def test_normalize_headers_handles_already_mixed_case_headers_too():
+    """A hand-rolled test double or an HTTP/1.1 origin may still send
+    mixed-case header names -- normalization must not depend on the
+    server's casing convention either way."""
+    msg = _message_with_headers({"Access-Control-Allow-Origin": CANDIDATE_ORIGIN})
+    normalized = vc._normalize_headers(msg)
+    assert normalized["access-control-allow-origin"] == CANDIDATE_ORIGIN
+
+
+def test_http_with_origin_normalizes_lowercase_headers_on_a_normal_response():
+    """End-to-end through _http_with_origin's success path (only urlopen is
+    mocked -- _normalize_headers itself is exercised) with headers cased
+    exactly as Cloud Run's Google Frontend sends them."""
+    fake_resp = _fake_context_manager_response(
+        200, _message_with_headers({"access-control-allow-origin": CANDIDATE_ORIGIN})
+    )
+
+    with patch.object(vc.urllib.request, "urlopen", return_value=fake_resp):
+        status, headers = vc._http_with_origin(
+            "GET", "https://candidate---rateguard-api-example.a.run.app/health/live", CANDIDATE_ORIGIN
+        )
+
+    assert status == 200
+    assert headers.get("access-control-allow-origin") == CANDIDATE_ORIGIN
+
+
+def test_http_with_origin_normalizes_lowercase_headers_on_an_http_error_response():
+    """Same guarantee on the HTTPError path (e.g. a 400 preflight
+    rejection) -- normalization must not be skipped just because the
+    response was an error."""
+    fake_error = urllib.error.HTTPError(
+        url="https://candidate---rateguard-api-example.a.run.app/api/v1/missions",
+        code=400,
+        msg="Disallowed CORS origin",
+        hdrs=_message_with_headers({"access-control-allow-methods": "GET, POST, OPTIONS"}),
+        fp=None,
+    )
+
+    with patch.object(vc.urllib.request, "urlopen", side_effect=fake_error):
+        status, headers = vc._http_with_origin(
+            "OPTIONS",
+            "https://candidate---rateguard-api-example.a.run.app/api/v1/missions",
+            CANDIDATE_ORIGIN,
+            extra_headers={"Access-Control-Request-Method": "POST"},
+        )
+
+    assert status == 400
+    assert headers.get("access-control-allow-methods") == "GET, POST, OPTIONS"
+
+
+def test_check_cors_end_to_end_passes_with_real_lowercase_cloud_run_headers():
+    """The full regression: check_cors_from_candidate_web_origin, using the
+    REAL _http_with_origin (only urlopen is mocked), correctly recognizes a
+    genuinely CORS-correct candidate API whose headers are cased exactly as
+    Cloud Run's Google Frontend sends them -- this is the scenario from the
+    bug report, where a curl GET showed the header present but
+    verify_candidate.py still reported allow-origin=None."""
+    get_resp = _fake_context_manager_response(
+        200,
+        _message_with_headers({
+            "access-control-allow-origin": CANDIDATE_ORIGIN,
+            "access-control-allow-credentials": "true",
+        }),
+    )
+    preflight_resp = _fake_context_manager_response(
+        200,
+        _message_with_headers({
+            "access-control-allow-origin": CANDIDATE_ORIGIN,
+            "access-control-allow-methods": "GET, POST, OPTIONS",
+            "access-control-allow-credentials": "true",
+        }),
+    )
+
+    responses = iter([get_resp, preflight_resp])
+    report = vc.Report()
+    with patch.object(vc.urllib.request, "urlopen", side_effect=lambda *a, **k: next(responses)):
+        vc.check_cors_from_candidate_web_origin(
+            report, "https://candidate---rateguard-api-example.a.run.app", CANDIDATE_ORIGIN
+        )
+
+    assert report.checks[-1].passed is True
+    assert "allow-origin=None" not in report.checks[-1].detail
 
 
 def test_main_fails_the_cors_check_when_frontend_url_is_not_provided():

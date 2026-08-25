@@ -51,6 +51,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from typing import Any
 
 EXPECTED_GEMINI_MODEL = "gemini-3.7-flash"
 EXPECTED_FRAMEWORK_SUBSTRING = "Google GenAI SDK"
@@ -99,24 +100,39 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 30.0
             return e.code, {"raw": raw}
 
 
+def _normalize_headers(headers: Any) -> dict[str, str]:
+    """Normalizes HTTP response header names to lowercase exactly once, at
+    the single point where they're captured. HTTP/2 intermediaries --
+    including Cloud Run's Google Frontend -- lowercase every header name per
+    RFC 7540 §8.1.2, so a plain `dict(response.headers)` preserves whatever
+    casing the server actually sent on the wire and silently breaks any
+    capitalized-key lookup like "Access-Control-Allow-Origin". `headers` is
+    an `http.client.HTTPMessage` (from a normal response) or
+    `email.message.Message` (from an HTTPError) -- both support `.items()`,
+    and both may repeat a header name, so this keeps the last occurrence
+    exactly like `dict(headers)` already did."""
+    return {k.lower(): v for k, v in headers.items()}
+
+
 def _http_with_origin(
     method: str, url: str, origin: str, extra_headers: dict | None = None, timeout: float = 15.0
-) -> tuple[int, dict]:
+) -> tuple[int, dict[str, str]]:
     """Like _http, but sends a browser-shaped Origin header and returns
-    response HEADERS instead of the parsed body -- this is the piece plain
-    CLI/urllib acceptance checks never exercised: a client that never sends
-    Origin never observes CORSMiddleware reject a request, so a candidate
-    deployment could pass every other check here while every real browser
-    request from the candidate frontend was silently blocked."""
+    response HEADERS (normalized to lowercase keys -- see
+    _normalize_headers) instead of the parsed body -- this is the piece
+    plain CLI/urllib acceptance checks never exercised: a client that never
+    sends Origin never observes CORSMiddleware reject a request, so a
+    candidate deployment could pass every other check here while every real
+    browser request from the candidate frontend was silently blocked."""
     headers = {"Origin": origin}
     if extra_headers:
         headers.update(extra_headers)
     req = urllib.request.Request(url, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, dict(resp.headers)
+            return resp.status, _normalize_headers(resp.headers)
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers)
+        return e.code, _normalize_headers(e.headers)
 
 
 def check_health_live(report: Report, api_url: str) -> None:
@@ -188,10 +204,19 @@ def check_cors_from_candidate_web_origin(report: Report, api_url: str, frontend_
     with Origin set to the candidate frontend's own origin, and an OPTIONS
     preflight for a real mission-creation POST, exactly as a browser would
     send it before the candidate frontend's first API call."""
+    # Response headers from _http_with_origin are already normalized to
+    # lowercase keys (see _normalize_headers) -- these constants are
+    # deliberately lowercase to match, never the mixed-case spelling a
+    # browser/spec doc uses, so a future edit can't silently reintroduce a
+    # case-sensitive lookup against Cloud Run's lowercased HTTP/2 headers.
+    allow_origin_header = "access-control-allow-origin"
+    allow_methods_header = "access-control-allow-methods"
+
     origin = frontend_url.rstrip("/")
 
     get_status, get_headers = _http_with_origin("GET", f"{api_url}/health/live", origin)
-    get_ok = get_status == 200 and get_headers.get("Access-Control-Allow-Origin") == origin
+    get_allow_origin = get_headers.get(allow_origin_header)
+    get_ok = get_status == 200 and get_allow_origin == origin
 
     preflight_status, preflight_headers = _http_with_origin(
         "OPTIONS",
@@ -202,20 +227,22 @@ def check_cors_from_candidate_web_origin(report: Report, api_url: str, frontend_
             "Access-Control-Request-Headers": "content-type",
         },
     )
+    preflight_allow_origin = preflight_headers.get(allow_origin_header)
+    preflight_allow_methods = preflight_headers.get(allow_methods_header) or ""
     preflight_ok = (
         preflight_status == 200
-        and preflight_headers.get("Access-Control-Allow-Origin") == origin
-        and "POST" in (preflight_headers.get("Access-Control-Allow-Methods") or "")
+        and preflight_allow_origin == origin
+        and "POST" in preflight_allow_methods
     )
 
     ok = get_ok and preflight_ok
     report.add(
         "cors_allows_candidate_web_origin", ok,
         f"origin={origin}, GET /health/live: HTTP {get_status} "
-        f"allow-origin={get_headers.get('Access-Control-Allow-Origin')!r}; "
+        f"allow-origin={get_allow_origin!r}; "
         f"OPTIONS preflight on /api/v1/missions: HTTP {preflight_status} "
-        f"allow-origin={preflight_headers.get('Access-Control-Allow-Origin')!r} "
-        f"allow-methods={preflight_headers.get('Access-Control-Allow-Methods')!r}",
+        f"allow-origin={preflight_allow_origin!r} "
+        f"allow-methods={preflight_allow_methods!r}",
     )
 
 
