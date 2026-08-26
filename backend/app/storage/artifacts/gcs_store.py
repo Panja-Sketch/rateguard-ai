@@ -40,6 +40,16 @@ class GCSArtifactStore(BaseArtifactStore):
             else:
                 raise
 
+    def _gcs_path(self, artifact_id: str) -> str:
+        """Derives the GCS object path from `artifact_id` alone, so any process
+        can read back what another process saved. Never route this through the
+        local descriptor cache (`self._fallback_store`) — that cache lives only
+        in the memory of whichever process called `save_artifact`, and is empty
+        in every other Cloud Run instance/service (e.g. the worker reading an
+        artifact the API saved). Gating the GCS read behind that cache was the
+        root cause of compiled sources being invisible to the worker."""
+        return f"artifacts/{artifact_id}"
+
     def save_artifact(
         self,
         descriptor: ArtifactDescriptor,
@@ -48,7 +58,7 @@ class GCSArtifactStore(BaseArtifactStore):
         self._fallback_store.save_artifact(descriptor, content)
         if self._bucket is not None:
             try:
-                gcs_path = f"artifacts/{descriptor.category.value}/{descriptor.filename}"
+                gcs_path = self._gcs_path(descriptor.artifact_id)
                 blob = self._bucket.blob(gcs_path)
                 blob.upload_from_string(content, content_type=descriptor.content_type)
                 descriptor.storage_uri = f"gs://{self.bucket_name}/{gcs_path}"
@@ -59,11 +69,9 @@ class GCSArtifactStore(BaseArtifactStore):
         return descriptor
 
     def get_artifact_content(self, artifact_id: str) -> bytes | None:
-        desc = self._fallback_store.get_descriptor(artifact_id)
-        if desc and self._bucket is not None and desc.storage_uri.startswith("gs://"):
+        if self._bucket is not None:
             try:
-                gcs_path = desc.storage_uri.replace(f"gs://{self.bucket_name}/", "")
-                blob = self._bucket.blob(gcs_path)
+                blob = self._bucket.blob(self._gcs_path(artifact_id))
                 if blob.exists():
                     return blob.download_as_bytes()
             except Exception as e:
