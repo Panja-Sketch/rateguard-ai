@@ -51,7 +51,19 @@ export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffVi
       </div>
 
       <div className="space-y-3">
-        {diffs.map((diff, idx) => (
+        {diffs.map((diff, idx) => {
+          // The backend's MaterialFinding sends intent_value/target_value (and
+          // folds difference_type/semantic_path into `category`/`title`) --
+          // left_value/right_value/difference_type/semantic_path only ever
+          // come from a raw SemanticDifference, never from a real mission
+          // payload. Prefer whichever the response actually populated, and
+          // hide a label entirely rather than render it next to nothing.
+          const intentValue = diff.intent_value ?? diff.left_value;
+          const targetValue = diff.target_value ?? diff.right_value;
+          const typeLabel = diff.difference_type || diff.category;
+          const pathLabel = diff.semantic_path;
+
+          return (
           <div
             key={diff.id || idx}
             className="rounded-lg border border-slate-800 bg-slate-900/80 p-4 transition-all hover:border-slate-700"
@@ -65,27 +77,37 @@ export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffVi
                 >
                   {diff.severity}
                 </span>
-                <span className="font-mono text-xs font-bold text-sky-400">
-                  {diff.difference_type}
-                </span>
+                {typeLabel && (
+                  <span className="font-mono text-xs font-bold text-sky-400">
+                    {typeLabel}
+                  </span>
+                )}
               </div>
-              <span className="font-mono text-xs text-slate-400">
-                {diff.semantic_path}
-              </span>
+              {pathLabel && (
+                <span className="font-mono text-xs text-slate-400">
+                  {pathLabel}
+                </span>
+              )}
             </div>
 
             <p className="mb-3 text-sm text-slate-200">{diff.description}</p>
 
-            <div className="grid grid-cols-1 gap-2 rounded border border-slate-800 bg-slate-950 p-2.5 sm:grid-cols-2 text-xs font-mono">
-              <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5 sm:border-b-0 sm:border-r sm:pr-2 sm:pb-0">
-                <span className="text-slate-500 font-sans">Intent:</span>
-                <span className="text-emerald-400 font-bold">{diff.left_value}</span>
+            {(intentValue || targetValue) && (
+              <div className="grid grid-cols-1 gap-2 rounded border border-slate-800 bg-slate-950 p-2.5 sm:grid-cols-2 text-xs font-mono">
+                {intentValue && (
+                  <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5 sm:border-b-0 sm:border-r sm:pr-2 sm:pb-0">
+                    <span className="text-slate-500 font-sans">Intent:</span>
+                    <span className="text-emerald-400 font-bold">{intentValue}</span>
+                  </div>
+                )}
+                {targetValue && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 font-sans">Target:</span>
+                    <span className="text-rose-400 font-bold">{targetValue}</span>
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-sans">Target:</span>
-                <span className="text-rose-400 font-bold">{diff.right_value}</span>
-              </div>
-            </div>
+            )}
 
             {diff.affected_output && (
               <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-400">
@@ -95,7 +117,8 @@ export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffVi
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

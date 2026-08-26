@@ -61,13 +61,20 @@ export interface MaterialFinding {
 }
 
 export interface SemanticDiffItem {
-  id: string;
+  // A real mission's MaterialFinding payload only ever sends finding_id,
+  // category, severity, description, intent_value/target_value, and
+  // affected_node -- id/difference_type/semantic_path/left_value/right_value
+  // are legacy raw-SemanticDifference field names that no live API response
+  // actually populates, so they're optional here rather than falsely
+  // guaranteed.
+  id?: string;
   finding_id?: string;
+  category?: string;
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  difference_type: string;
-  semantic_path: string;
-  left_value: string;
-  right_value: string;
+  difference_type?: string;
+  semantic_path?: string;
+  left_value?: string;
+  right_value?: string;
   description: string;
   provenance?: string;
   affected_output?: string;
