@@ -23,16 +23,19 @@ From there, a bounded, structured Gemini supervisor and a suite of deterministic
 
 ## Agentic Gemini Workflow
 
-RateGuard runs a mandatory deterministic evidence pipeline unconditionally (validation → IPIR comparison → dependency impact → boundary-test generation → premium oracle → target execution → trace reconciliation), and consults **Gemini 3.7 Flash** (via the Google GenAI SDK against Vertex AI) at a small number of bounded, structured decision points inside `AssuranceSupervisor`:
+RateGuard runs a mandatory deterministic evidence pipeline unconditionally (validation → IPIR comparison → dependency impact → boundary-test generation → premium oracle → target execution → trace reconciliation), and consults **Gemini 3.7 Flash** (via the Google GenAI SDK against Vertex AI) at a small, bounded set of structured decision points inside `AssuranceSupervisor`. There are seven distinct decision-point *kinds* in the code; which ones actually fire depends on what a given mission finds:
 
-| Decision point | What Gemini decides |
-| :--- | :--- |
-| `PRIORITIZE_DIFFERENCES` | Which already-detected semantic differences deserve focused boundary testing |
-| `SELECT_BOUNDARY_TESTS` | Which deterministically-generated candidate boundary tests to execute |
-| Evidence sufficiency | Whether one more bounded round of probes is worth running (capped at `MAX_PROBE_ROUNDS`) |
-| Portfolio justification | How to frame the 50K-policy blast-radius narrative |
-| Remediation proposal | What isolated patch would resolve a confirmed defect |
-| Remediation revalidation selection | Which tests to re-run to prove the patch actually fixes it |
+| Decision point | What Gemini decides | Fires when |
+| :--- | :--- | :--- |
+| `CHOOSE_EXTRACTION_STRATEGY` | Which extractor to use for a genuinely ambiguous uploaded PDF/Excel source | Only for ambiguous uploaded sources — not for the bundled sample packages |
+| `PRIORITIZE_DIFFERENCES` | Which already-detected semantic differences deserve focused boundary testing | Whenever semantic differences exist |
+| `SELECT_BOUNDARY_TESTS` | Which deterministically-generated candidate boundary tests to execute | Whenever semantic differences exist |
+| `EVIDENCE_SUFFICIENCY` | Whether one more bounded round of probes is worth running (capped at `MAX_PROBE_ROUNDS`) | After the first boundary-test round |
+| `PORTFOLIO_JUSTIFICATION` | Whether the costly full 50K-policy scan is still warranted | Only when zero premium mismatches were reproduced despite detected differences |
+| `PROPOSE_REMEDIATION` | What isolated patch would resolve a confirmed defect | Whenever a mismatch is reproduced |
+| `SELECT_REVALIDATION_TESTS` | Which targeted + regression tests to re-run against the proposed patch | Whenever a remediation is proposed |
+
+A judge running the standard demo path — a `RELEASE_CONFORMANCE` mission against the bundled defective target, ending in `BLOCK_DEPLOYMENT` — will see exactly **five** invocations in the Gemini Action Timeline: prioritization, boundary-test selection, evidence sufficiency, remediation proposal, and revalidation selection. Portfolio justification and extraction strategy are real code paths but conditional on the specific mission (respectively: zero reproduced mismatches, and an ambiguous uploaded source), so they won't appear in that run — this table describes what exists in the code, and the sentence above describes what one concrete production mission actually shows.
 
 Every Gemini call is schema-validated structured output, and Gemini may **only select IDs from a candidate pool a deterministic engine already produced** — it can never invent a finding, a test scenario, or a dollar figure. Every mission is capped at `MAX_GEMINI_CALLS_PER_MISSION` calls. If Gemini is unavailable or returns an invalid response, every decision point has a deterministic fallback (e.g. "retain all differences," "use optimizer-selected tests") so a mission never stalls on an LLM outage — and the UI honestly reports which path was taken (`is_gemini_decision` / `is_fallback` on every logged action).
 
@@ -40,23 +43,42 @@ When two sources are found to be fully equivalent with **zero** AST diffs, Gemin
 
 ## Architecture
 
-```
-User Browser / Client → Next.js 14 Frontend
-  ↓ HTTP REST API
-FastAPI Backend (Cloud Run API)
-  ↓ Pub/Sub Async Queue
-Private Worker Runtime (Cloud Run Worker, no public ingress)
-  ↓ Agentic Assurance Supervisor
-Google GenAI SDK Structured-Decision Supervisor ↔ Gemini 3.7 Flash (Vertex AI)
-  ↕ Deterministic Boundary
-Python Deterministic Engines (AST Diff, Dependency DAG, Premium Oracle, Test Generator, Reconciliation)
-  ↓ Cloud Persistence
-Firestore (mission/run state) | BigQuery (50K-policy portfolio SQL) | GCS (source & evidence artifacts)
-  ↓ Release Decision
-PASS / REVIEW_REQUIRED / BLOCK_DEPLOYMENT
+```mermaid
+flowchart TB
+    User(["User / Judge browser"])
+    Web["Next.js 14 Frontend<br/>(Cloud Run: rateguard-web)"]
+    API["FastAPI API<br/>(Cloud Run: rateguard-api, public)"]
+    Topic[["Pub/Sub topic<br/>assurance-runs"]]
+    Worker["Worker<br/>(Cloud Run: rateguard-worker, private)"]
+    Supervisor["AssuranceSupervisor<br/>(Google GenAI SDK)"]
+    Gemini(("Gemini 3.7 Flash<br/>Vertex AI"))
+    Engines["Deterministic Engines<br/>AST Diff · Dependency DAG · Premium Oracle<br/>Test Generator · Reconciliation · Portfolio SQL"]
+    Firestore[("Firestore<br/>mission/run state")]
+    BigQuery[("BigQuery<br/>50K-policy portfolio")]
+    GCS[("Cloud Storage<br/>sources & evidence")]
+    Decision{"Release Decision<br/>PASS / REVIEW_REQUIRED<br/>BLOCK_DEPLOYMENT"}
+
+    User -- HTTPS --> Web
+    Web -- REST --> API
+    API -- "persist QUEUED" --> Firestore
+    API -- publish --> Topic
+    Topic -- "push, OIDC-authenticated" --> Worker
+    Worker -- "acquire lease" --> Firestore
+    Worker --> Supervisor
+    Supervisor <-- "bounded, schema-validated calls<br/>(candidate IDs only, never raw values)" --> Gemini
+    Supervisor --> Engines
+    Engines --> BigQuery
+    Engines --> GCS
+    Supervisor -- evidence & result --> Firestore
+    Supervisor --> Decision
+    Firestore -. poll for status/result .-> Web
+
+    style Gemini fill:#7c3aed,stroke:#4c1d95,color:#fff
+    style Engines fill:#0369a1,stroke:#0c4a6e,color:#fff
+    style Decision fill:#065f46,stroke:#022c22,color:#fff
 ```
 
-The API validates a mission request synchronously (~2ms), persists it as `QUEUED` in Firestore, and publishes an `AssuranceJob` to a Pub/Sub topic. A push subscription delivers it to the private worker, which acquires an atomic Firestore execution lease (so duplicate Pub/Sub delivery can never double-execute a mission) and runs the full pipeline asynchronously — mission execution never runs in-process inside the public API.
+The API validates a mission request synchronously (~2ms), persists it as `QUEUED` in Firestore, and publishes an `AssuranceJob` to a Pub/Sub topic. A push subscription delivers it to the private worker, which acquires an atomic Firestore execution lease (so duplicate Pub/Sub delivery can never double-execute a mission) and runs the full pipeline asynchronously — mission execution never runs in-process inside the public API. The frontend never talks to Gemini or the worker directly; it only polls the API for mission status and the final result.
 
 ## Key Features
 

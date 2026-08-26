@@ -23,9 +23,14 @@ interface ReconciliationTraceProps {
     } | null;
   }) | null;
   isCompleted?: boolean;
+  // Symmetric Equivalence assumes neither source is authoritative -- use
+  // neutral "Source A"/"Source B" labels instead of Intent/Target framing.
+  neutralLabels?: boolean;
 }
 
-export function ReconciliationTrace({ scenario, isCompleted = true }: ReconciliationTraceProps) {
+export function ReconciliationTrace({ scenario, isCompleted = true, neutralLabels = false }: ReconciliationTraceProps) {
+  const expectedLabel = neutralLabels ? 'Source A' : 'Intent Expected';
+  const actualLabel = neutralLabels ? 'Source B' : 'Target Actual';
   if (!scenario) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
@@ -74,7 +79,7 @@ export function ReconciliationTrace({ scenario, isCompleted = true }: Reconcilia
           <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
           <div className="text-xs text-emerald-200">
             <span className="font-bold text-white">Full Behavioral Equivalence: </span>
-            This test scenario executed end-to-end with 0 calculation trace divergences between canonical specification and target engine.
+            This test scenario executed end-to-end with 0 calculation trace divergences between {neutralLabels ? 'Source A and Source B' : 'canonical specification and target engine'}.
           </div>
         </div>
       ) : (
@@ -87,7 +92,7 @@ export function ReconciliationTrace({ scenario, isCompleted = true }: Reconcilia
             {rootCause?.explanation || (
               <>
                 Node <span className="font-mono font-bold text-white">{firstDivergence || 'pricing_factor'}</span> produced first calculation divergence.
-                Expected <span className="font-mono text-emerald-300 font-bold">${scenario.expected_premium}</span> but target implementation returned <span className="font-mono text-rose-300 font-bold">${scenario.actual_premium}</span>.
+                {neutralLabels ? 'Source A computed' : 'Expected'} <span className="font-mono text-emerald-300 font-bold">${scenario.expected_premium}</span> but {neutralLabels ? 'Source B' : 'target implementation'} returned <span className="font-mono text-rose-300 font-bold">${scenario.actual_premium}</span>.
               </>
             )}
           </p>
@@ -100,8 +105,8 @@ export function ReconciliationTrace({ scenario, isCompleted = true }: Reconcilia
           <thead className="border-b border-slate-800 bg-slate-900 text-slate-400 font-sans">
             <tr>
               <th className="px-4 py-2.5">Calculation Node</th>
-              <th className="px-4 py-2.5 text-emerald-400">Intent Expected</th>
-              <th className="px-4 py-2.5 text-rose-400">Target Actual</th>
+              <th className="px-4 py-2.5 text-emerald-400">{expectedLabel}</th>
+              <th className="px-4 py-2.5 text-rose-400">{actualLabel}</th>
               <th className="px-4 py-2.5">Status</th>
             </tr>
           </thead>

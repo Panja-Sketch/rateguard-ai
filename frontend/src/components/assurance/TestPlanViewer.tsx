@@ -17,6 +17,9 @@ interface TestPlanViewerProps {
   onSelectScenario?: (scenario: TestScenario) => void;
   selectedScenarioId?: string;
   isCompleted?: boolean;
+  // Symmetric Equivalence assumes neither source is authoritative -- use
+  // neutral "Source A"/"Source B" labels instead of Intent/Target framing.
+  neutralLabels?: boolean;
 }
 
 export function TestPlanViewer({
@@ -24,8 +27,11 @@ export function TestPlanViewer({
   onSelectScenario,
   selectedScenarioId,
   isCompleted = true,
+  neutralLabels = false,
 }: TestPlanViewerProps) {
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
+  const expectedLabel = neutralLabels ? 'Source A' : 'Intent Expected';
+  const actualLabel = neutralLabels ? 'Source B' : 'Target Actual';
 
   const rawScenarios =
     (testPlan as any)?.selected_scenarios ||
@@ -45,9 +51,20 @@ export function TestPlanViewer({
     (testPlan as any)?.total_executed ||
     rawScenarios.length;
 
+  // candidateCount !== selectedCount means these are genuinely
+  // candidates-generated vs candidates-selected (the "material drift"
+  // pipeline), where the reduction percentage is an exact function of the
+  // two counts -- recomputing it here is always correct and self-heals any
+  // historical record whose stored reduction_pct was wrong (e.g. a stale
+  // hardcoded fallback from before that value was computed correctly).
+  // When the two counts are equal (the clean-equivalence pipeline, which
+  // always sets both to the same "test cases run" number), that equality
+  // carries no candidate-pool information, so the stored value -- the real
+  // optimizer-computed reduction -- is used as-is instead.
   const reductionPct =
-    (testPlan as any)?.reduction_pct ||
-    (candidateCount > 0 ? Math.round(((candidateCount - selectedCount) / candidateCount) * 100) : 0);
+    candidateCount > 0 && candidateCount !== selectedCount
+      ? Math.round(((candidateCount - selectedCount) / candidateCount) * 100)
+      : ((testPlan as any)?.reduction_pct ?? 0);
 
   if (!rawScenarios || rawScenarios.length === 0) {
     return (
@@ -106,8 +123,8 @@ export function TestPlanViewer({
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium">Scenario / Category</th>
               <th className="px-4 py-3 font-medium">Key Risk Inputs</th>
-              <th className="px-4 py-3 font-medium text-right">Intent Expected</th>
-              <th className="px-4 py-3 font-medium text-right">Target Actual</th>
+              <th className="px-4 py-3 font-medium text-right">{expectedLabel}</th>
+              <th className="px-4 py-3 font-medium text-right">{actualLabel}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">

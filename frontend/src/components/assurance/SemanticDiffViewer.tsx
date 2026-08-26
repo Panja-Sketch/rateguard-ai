@@ -6,9 +6,15 @@ import { AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
 interface SemanticDiffViewerProps {
   diffs?: SemanticDiffItem[];
   isCompleted?: boolean;
+  // Symmetric Equivalence assumes neither source is authoritative -- use
+  // neutral "Source A"/"Source B" labels instead of Release Conformance's
+  // Intent/Target framing.
+  neutralLabels?: boolean;
 }
 
-export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffViewerProps) {
+export function SemanticDiffViewer({ diffs, isCompleted = true, neutralLabels = false }: SemanticDiffViewerProps) {
+  const intentLabel = neutralLabels ? 'Source A:' : 'Intent:';
+  const targetLabel = neutralLabels ? 'Source B:' : 'Target:';
   if (!diffs || diffs.length === 0) {
     return (
       <div className="rounded-xl border border-emerald-800/60 bg-emerald-950/20 p-8 text-center space-y-3">
@@ -96,13 +102,13 @@ export function SemanticDiffViewer({ diffs, isCompleted = true }: SemanticDiffVi
               <div className="grid grid-cols-1 gap-2 rounded border border-slate-800 bg-slate-950 p-2.5 sm:grid-cols-2 text-xs font-mono">
                 {intentValue && (
                   <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5 sm:border-b-0 sm:border-r sm:pr-2 sm:pb-0">
-                    <span className="text-slate-500 font-sans">Intent:</span>
+                    <span className="text-slate-500 font-sans">{intentLabel}</span>
                     <span className="text-emerald-400 font-bold">{intentValue}</span>
                   </div>
                 )}
                 {targetValue && (
                   <div className="flex items-center gap-2">
-                    <span className="text-slate-500 font-sans">Target:</span>
+                    <span className="text-slate-500 font-sans">{targetLabel}</span>
                     <span className="text-rose-400 font-bold">{targetValue}</span>
                   </div>
                 )}

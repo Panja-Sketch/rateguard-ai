@@ -194,6 +194,10 @@ export default function MissionDetailPage() {
   const decision = result?.release_decision?.data?.status || missionData?.decision || 'UNKNOWN';
   const eligibleActions = missionData?.eligible_actions || { cancel: false, retry: false, archive: false, delete: false };
   const currentStage = missionData?.current_stage || null;
+  // Symmetric Equivalence assumes neither source is authoritative -- every
+  // tab consistently uses neutral "Source A"/"Source B" labels instead of
+  // Release Conformance's Intent/Target framing.
+  const isEquivalence = meta.mode === 'EQUIVALENCE';
 
   // Section Safeties
   const validationSec = result?.validation || { status: 'NOT_RUN' };
@@ -227,7 +231,19 @@ export default function MissionDetailPage() {
     const state = stageState(stageName);
     if (state === 'CANCELLED') return 'Cancelled — mission execution was stopped before this stage completed.';
     if (state === 'RUNNING') return 'Running.';
-    if (state === 'NOT_STARTED') return 'Not started.';
+    if (state === 'NOT_STARTED') {
+      // Once the mission itself is done, "Not started" is misleading -- a
+      // stage with no event ever fired either finished (a clean run whose 0
+      // diffs meant DAG/RCA/remediation were never needed) or the mission
+      // ended (failed/cancelled) before reaching it. Neither is "not started
+      // yet" from a user's perspective once nothing more is going to happen.
+      if (!isRunning) {
+        return statusStr === 'COMPLETED'
+          ? 'Skipped by design — no semantic differences required DAG, RCA, or remediation analysis.'
+          : 'Not reached — mission ended before this stage began.';
+      }
+      return 'Not started.';
+    }
     return sec?.reason || (sec?.status === 'FAILED' ? 'Failed.' : 'Completed without producing this section.');
   };
 
@@ -441,27 +457,41 @@ export default function MissionDetailPage() {
         )}
 
         {/* AI Runtime Header — model_status is reported as-is from the backend, never
-            hardcoded, so this never claims a live Gemini invocation that didn't happen. */}
+            hardcoded, so this never claims a live Gemini invocation that didn't happen.
+            `result` only ever has real content once the mission completes, so while a
+            mission is still running this must say so explicitly instead of falling
+            through to fallback strings ("Not configured"/"n/a"/"Unknown") that read as
+            a misconfiguration rather than "still in progress". */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-sky-400" />
-            <span className="font-bold text-white">AI Runtime:</span>
-            <span className="font-mono text-sky-300 font-bold">{result?.ai_runtime?.model_id || 'Not configured'}</span>
-            <span className="text-slate-500">|</span>
-            <span className="text-slate-300">Framework: {result?.ai_runtime?.framework || 'n/a'}</span>
-            <span className="text-slate-500">|</span>
-            <span
-              className={
-                result?.ai_runtime?.model_status && !result.ai_runtime.model_status.startsWith('NOT_')
-                  ? 'text-emerald-400 font-bold'
-                  : 'text-slate-400 font-bold'
-              }
-            >
-              {result?.ai_runtime?.model_status === 'NOT_INVOKED_DETERMINISTIC_PIPELINE'
-                ? 'Gemini not invoked by design — zero diffs were found deterministically, so no decision required AI judgment.'
-                : `Model Status: ${result?.ai_runtime?.model_status || 'Unknown'}`}
-            </span>
-          </div>
+          {isRunning ? (
+            <div className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-sky-400 animate-pulse" />
+              <span className="font-bold text-white">AI Runtime:</span>
+              <span className="text-slate-300">Pending invocation</span>
+              <span className="text-slate-500">|</span>
+              <span className="text-slate-400">Deterministic stages executing; Gemini not invoked yet.</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-sky-400" />
+              <span className="font-bold text-white">AI Runtime:</span>
+              <span className="font-mono text-sky-300 font-bold">{result?.ai_runtime?.model_id || 'Not configured'}</span>
+              <span className="text-slate-500">|</span>
+              <span className="text-slate-300">Framework: {result?.ai_runtime?.framework || 'n/a'}</span>
+              <span className="text-slate-500">|</span>
+              <span
+                className={
+                  result?.ai_runtime?.model_status && !result.ai_runtime.model_status.startsWith('NOT_')
+                    ? 'text-emerald-400 font-bold'
+                    : 'text-slate-400 font-bold'
+                }
+              >
+                {result?.ai_runtime?.model_status === 'NOT_INVOKED_DETERMINISTIC_PIPELINE'
+                  ? 'Gemini not invoked by design — zero diffs were found deterministically, so no decision required AI judgment.'
+                  : `Model Status: ${result?.ai_runtime?.model_status || 'Unknown'}`}
+              </span>
+            </div>
+          )}
           <span className="font-mono text-[11px] text-slate-400">Strict Deterministic Boundary Enforced</span>
         </div>
 
@@ -532,13 +562,13 @@ export default function MissionDetailPage() {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
                   <div className="rounded-lg border border-sky-800/80 bg-slate-950 p-3 space-y-1">
                     <div className="text-sky-400 font-bold font-sans">
-                      {meta.mode === 'EQUIVALENCE' ? 'Source A:' : 'Source A (Pricing Intent):'}
+                      {isEquivalence ? 'Source A:' : 'Source A (Pricing Intent):'}
                     </div>
                     <div className="text-slate-200">{meta.source_a || 'Not set'}</div>
                   </div>
                   <div className="rounded-lg border border-purple-800/80 bg-slate-950 p-3 space-y-1">
                     <div className="text-purple-400 font-bold font-sans">
-                      {meta.mode === 'EQUIVALENCE' ? 'Source B:' : 'Source B (Target Rating Implementation):'}
+                      {isEquivalence ? 'Source B:' : 'Source B (Target Rating Implementation):'}
                     </div>
                     <div className="text-slate-200">{meta.source_b || 'None (no target selected)'}</div>
                   </div>
@@ -550,7 +580,7 @@ export default function MissionDetailPage() {
           {/* Tab 2: Material Findings */}
           {activeTab === 'semantic' && (
             semanticSec?.status === 'SUCCEEDED' ? (
-              <SemanticDiffViewer diffs={semanticSec.data?.differences} isCompleted={true} />
+              <SemanticDiffViewer diffs={semanticSec.data?.differences} isCompleted={true} neutralLabels={isEquivalence} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
                 Status: {semanticSec?.status || 'NOT_RUN'} — {stageStatusLine('SEMANTIC_ANALYSIS', semanticSec)}
@@ -572,7 +602,7 @@ export default function MissionDetailPage() {
           {/* Tab 4: Boundary Experiments */}
           {activeTab === 'experiments' && (
             experimentsSec?.status === 'SUCCEEDED' ? (
-              <TestPlanViewer testPlan={experimentsSec.data} isCompleted={true} />
+              <TestPlanViewer testPlan={experimentsSec.data} isCompleted={true} neutralLabels={isEquivalence} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
                 Status: {experimentsSec?.status || 'NOT_RUN'} — {stageStatusLine('RISK_DIRECTED_TESTING', experimentsSec)}
@@ -583,7 +613,7 @@ export default function MissionDetailPage() {
           {/* Tab 5: Reconciliation & RCA */}
           {activeTab === 'recon' && (
             reconSec?.status === 'SUCCEEDED' ? (
-              <ReconciliationTrace scenario={experimentsSec?.data?.experiments?.[0] as any} isCompleted={true} />
+              <ReconciliationTrace scenario={experimentsSec?.data?.experiments?.[0] as any} isCompleted={true} neutralLabels={isEquivalence} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
                 Status: {reconSec?.status || 'NOT_RUN'} — {stageStatusLine('RECONCILIATION', reconSec)}
@@ -594,7 +624,7 @@ export default function MissionDetailPage() {
           {/* Tab 6: Blast Radius & Telemetry */}
           {activeTab === 'blast' && (
             blastSec?.status === 'SUCCEEDED' ? (
-              <PortfolioImpactFunnel portfolio={blastSec.data as any} isCompleted={true} />
+              <PortfolioImpactFunnel portfolio={blastSec.data as any} isCompleted={true} neutralLabels={isEquivalence} />
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
                 Status: {blastSec?.status || 'NOT_RUN'} — {stageStatusLine('PORTFOLIO_ANALYSIS', blastSec)}
@@ -624,7 +654,7 @@ export default function MissionDetailPage() {
                       <div key={key} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs font-mono space-y-1">
                         <div className="font-bold text-sky-300">{val.title || key}</div>
                         <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div>Target Value: <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
+                          <div>{isEquivalence ? 'Source B (current):' : 'Target Value:'} <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
                           <div>Proposed Value: <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
                         </div>
                       </div>

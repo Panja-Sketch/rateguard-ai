@@ -15,9 +15,12 @@ interface PortfolioImpactFunnelProps {
     overlapping_multi_defect_count?: number;
   }) | null;
   isCompleted?: boolean;
+  // Symmetric Equivalence assumes neither source is authoritative -- use
+  // neutral Source A/B framing instead of Intent/Target language.
+  neutralLabels?: boolean;
 }
 
-export function PortfolioImpactFunnel({ portfolio, isCompleted = true }: PortfolioImpactFunnelProps) {
+export function PortfolioImpactFunnel({ portfolio, isCompleted = true, neutralLabels = false }: PortfolioImpactFunnelProps) {
   if (!portfolio) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
@@ -146,7 +149,7 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true }: Portfol
             {formatCurrency(underchargeAmount)}
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Target rating engine under-billed policyholders due to defective discounts or factor reductions.
+            {neutralLabels ? 'Source B' : 'Target rating engine'} under-billed policyholders due to defective discounts or factor reductions.
           </p>
         </div>
 
@@ -164,7 +167,7 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true }: Portfol
             {formatCurrency(overchargeAmount)}
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Target engine charged higher than actuarial filing intent, triggering consumer compliance risk.
+            {neutralLabels ? 'Source B charged higher than Source A' : 'Target engine charged higher than actuarial filing intent'}, triggering consumer compliance risk.
           </p>
         </div>
       </div>
