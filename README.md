@@ -98,7 +98,7 @@ The API validates a mission request synchronously (~2ms), persists it as `QUEUED
 | Format | Status |
 | :--- | :--- |
 | Native IPIR / structured JSON | **Supported** — deterministically compiled, strict schema validation, structured 422 errors on failure |
-| Excel workbooks, PDF filings | **Not supported today.** Upload is rejected server-side (`422`) rather than silently accepted. The adapter code exists in `backend/app/adapters/` but has no verified extraction accuracy against real filings, so it is not exposed through the API — see [The Deterministic Boundary](#the-deterministic-boundary) for why RateGuard will not claim a compilation it can't stand behind. |
+| Excel workbooks, PDF filings | **Not supported today.** Upload is rejected server-side (`400`) rather than silently accepted. The adapter code exists in `backend/app/adapters/` but has no verified extraction accuracy against real filings, so it is not exposed through the API — see [The Deterministic Boundary](#the-deterministic-boundary) for why RateGuard will not claim a compilation it can't stand behind. |
 | YAML, CSV | **Not implemented.** No adapter exists; there is no UI path to upload one. |
 
 RateGuard intentionally does not claim to analyze an arbitrary spreadsheet or filing PDF — only what it can genuinely and verifiably compile end-to-end. Every uploaded source is compiled through the same deterministic strict-schema path described below, and every compiled package is assigned a namespaced identity (`{ipir_package_id}--{source_id}`) so two different uploads can never collide, even if their internal `id` fields happen to match.
