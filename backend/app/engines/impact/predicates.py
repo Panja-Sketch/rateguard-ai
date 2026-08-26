@@ -6,7 +6,7 @@ from app.engines.diff.models import SemanticDifference
 from app.engines.impact.models import ImpactPredicate, PredicateClause
 from app.ipir.enums import ComparisonOperator, LogicalOperator
 from app.ipir.package import IPIRPackage
-from app.ipir.tables import TableLookupType
+from app.ipir.tables import RangeMatch, TableLookupType
 
 
 def derive_predicate_from_difference(
@@ -85,3 +85,59 @@ def derive_predicate_from_difference(
         )
 
     return None
+
+
+def derive_predicates_from_package(package: IPIRPackage) -> list[ImpactPredicate]:
+    """Derives boundary risk predicates directly from a package's own rate table
+    rows, with no semantic diff to key off of.
+
+    Used for Runtime Verification mode, which has no Source B / diff — pricing
+    correctness there is judged solely by probing a black-box rating API, so
+    the boundary conditions worth probing must come from Source A's own rate
+    table range dimensions instead of a diff's changed row.
+    """
+    predicates: list[ImpactPredicate] = []
+    counter = 0
+
+    for table in package.tables:
+        range_dim_indices = [
+            i for i, dim in enumerate(table.dimensions) if dim.lookup_type == TableLookupType.RANGE
+        ]
+        if not range_dim_indices:
+            continue
+
+        for row in table.rows:
+            clauses: list[PredicateClause] = []
+            for dim, match in zip(table.dimensions, row.matches, strict=False):
+                if isinstance(match, RangeMatch):
+                    if match.minimum is not None:
+                        clauses.append(
+                            PredicateClause(
+                                field=dim.input_ref, operator=ComparisonOperator.GTE, value=match.minimum,
+                            )
+                        )
+                    if match.maximum is not None:
+                        clauses.append(
+                            PredicateClause(
+                                field=dim.input_ref, operator=ComparisonOperator.LTE, value=match.maximum,
+                            )
+                        )
+                else:
+                    clauses.append(
+                        PredicateClause(field=dim.input_ref, operator=ComparisonOperator.EQ, value=match.value)
+                    )
+
+            if not any(c.operator in (ComparisonOperator.GTE, ComparisonOperator.LTE) for c in clauses):
+                continue
+
+            counter += 1
+            predicates.append(
+                ImpactPredicate(
+                    id=f"pred_self_{table.id}_{counter}",
+                    clauses=clauses,
+                    logical_operator=LogicalOperator.AND,
+                    description=f"Risk attributes matching rate table '{table.id}' row boundary.",
+                )
+            )
+
+    return predicates

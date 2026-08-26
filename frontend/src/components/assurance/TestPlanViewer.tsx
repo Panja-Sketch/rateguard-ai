@@ -30,16 +30,19 @@ export function TestPlanViewer({
   const rawScenarios =
     (testPlan as any)?.selected_scenarios ||
     (testPlan as any)?.scenarios ||
+    (testPlan as any)?.experiments ||
     [];
 
   const candidateCount =
     (testPlan as any)?.total_candidates_generated ||
     (testPlan as any)?.candidate_count ||
+    (testPlan as any)?.total_generated ||
     rawScenarios.length;
 
   const selectedCount =
     (testPlan as any)?.total_scenarios_selected ||
     (testPlan as any)?.selected_count ||
+    (testPlan as any)?.total_executed ||
     rawScenarios.length;
 
   const reductionPct =
@@ -109,7 +112,8 @@ export function TestPlanViewer({
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
             {filteredScenarios.map((sc: TestScenario) => {
-              const isSelected = sc.scenario_id === selectedScenarioId;
+              const scenarioKey = sc.scenario_id || sc.experiment_id;
+              const isSelected = scenarioKey === selectedScenarioId;
               const matches = sc.matches;
               const inputsStr = sc.risk_inputs
                 ? Object.entries(sc.risk_inputs)
@@ -120,7 +124,7 @@ export function TestPlanViewer({
 
               return (
                 <tr
-                  key={sc.scenario_id}
+                  key={scenarioKey}
                   onClick={() => onSelectScenario && onSelectScenario(sc)}
                   className={`cursor-pointer transition-colors hover:bg-slate-800/50 ${
                     isSelected ? 'bg-sky-950/60 font-semibold' : ''
@@ -138,7 +142,7 @@ export function TestPlanViewer({
                     )}
                   </td>
                   <td className="px-4 py-3 font-sans">
-                    <div className="font-bold text-slate-100">{sc.name || sc.scenario_id}</div>
+                    <div className="font-bold text-slate-100">{sc.name || sc.probe_name || scenarioKey}</div>
                     <div className="text-[11px] text-sky-400 font-mono">{sc.category || 'Standard'}</div>
                   </td>
                   <td className="px-4 py-3 text-slate-300 text-[11px]">

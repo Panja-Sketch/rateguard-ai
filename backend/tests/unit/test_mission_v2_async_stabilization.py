@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -25,6 +26,8 @@ from app.storage import AssuranceRunRecord, AssuranceRunStatus, get_run_store
 from app.storage.firestore_store import sanitize_for_firestore
 
 client = TestClient(app)
+
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 
 
 def test_async_mission_creation_returns_202_fast():
@@ -150,6 +153,65 @@ def test_distributed_mission_execution_path():
     detail = get_res.json()
     assert detail["status"] in ("COMPLETED", "FINISHED")
     assert detail["decision"] == "PASS"
+
+
+def test_real_uploaded_source_resolves_through_v2_worker_dispatch():
+    """Proves a real uploaded/compiled source (source_type FILE, as used by the
+    /sources page) resolves correctly inside MissionExecutionService, instead of
+    being rejected as an unsupported demo package_id. Covers the mission_execution_service
+    _resolve_source_package fallback that reads the compiled IPIR artifact back
+    from the artifact store."""
+    content = (_DATA_DIR / "actuarial" / "AZ_HO3_2026_09_rate_spec.json").read_bytes()
+
+    upload_res = client.post(
+        "/api/v1/sources",
+        files={"file": ("rate_spec.json", content, "application/json")},
+    )
+    assert upload_res.status_code == 200
+    source_id = upload_res.json()["source_id"]
+
+    compile_res = client.post(f"/api/v1/sources/{source_id}/compile")
+    assert compile_res.status_code == 200
+    compiled_package_id = compile_res.json()["ipir_package_id"]
+
+    payload = {
+        "name": "Real Uploaded Source Mission",
+        "mode": "RELEASE_CONFORMANCE",
+        "product": "AZ_HO3",
+        "jurisdiction": "Arizona",
+        "source_a": {
+            "source_id": source_id,
+            "source_type": "FILE",
+            "name": "rate_spec.json",
+            "compiled_package_id": compiled_package_id,
+        },
+        "source_b": {"source_id": "AZ_HO3_2026_09_CLEAN", "source_type": "SAMPLE_RELEASE", "name": "Target"},
+        "disposable_sample_run": True,
+    }
+    post_res = client.post("/api/v1/missions", json=payload)
+    assert post_res.status_code == 202
+    mission_id = post_res.json()["mission_id"]
+
+    job = AssuranceJob(
+        job_id=f"JOB-{mission_id}",
+        run_id=mission_id,
+        job_type="ASSURANCE_MISSION_V2",
+        schema_version=2,
+        left_source_id=source_id,
+        right_source_id="AZ_HO3_2026_09_CLEAN",
+        left_package_id=source_id,
+        right_package_id="AZ_HO3_2026_09_CLEAN",
+    )
+    b64_data = base64.b64encode(json.dumps(job.model_dump(mode="json")).encode("utf-8")).decode("utf-8")
+    envelope = {"message": {"data": b64_data, "message_id": "MSG-TEST-FILE-SOURCE"}}
+
+    pub_res = client.post("/internal/pubsub/assurance", json=envelope)
+    assert pub_res.status_code == 200
+    assert pub_res.json()["status"] == ProcessingOutcome.SUCCEEDED.value
+
+    get_res = client.get(f"/api/v1/missions/{mission_id}")
+    assert get_res.status_code == 200
+    assert get_res.json()["status"] in ("COMPLETED", "FINISHED")
 
 
 def test_execution_lease_skips_duplicate_delivery():

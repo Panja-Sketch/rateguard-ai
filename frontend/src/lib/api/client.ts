@@ -281,50 +281,6 @@ export async function listAssuranceRuns(limit: number = 50): Promise<{
   return handleResponse(res);
 }
 
-export async function startAssuranceRun(params: {
-  leftPackageId?: string;
-  rightPackageId?: string;
-  leftSourceId?: string;
-  rightSourceId?: string;
-  asyncExecution?: boolean;
-}): Promise<{
-  run_id: string;
-  status: string;
-  job_id?: string;
-  executive_summary?: string;
-  recommendation?: string;
-  result?: AssuranceReport;
-}> {
-  // No hidden demo fallback: callers must explicitly resolve a package or source id
-  // (see sources/page.tsx and missions/new/page.tsx) before invoking this.
-  if (!params.leftPackageId && !params.leftSourceId) {
-    throw new ApiError('Source A must be selected before executing an assurance run.', 400);
-  }
-  if (!params.rightPackageId && !params.rightSourceId) {
-    throw new ApiError('Source B must be selected before executing an assurance run.', 400);
-  }
-
-  // Values are passed through as-is (no `|| 'AZ_HO3_...'` fallback) — callers are
-  // responsible for only invoking this once a real package/source id is resolved.
-  const payload = {
-    left_package_id: params.leftPackageId,
-    right_package_id: params.rightPackageId,
-    left_source_id: params.leftSourceId || null,
-    right_source_id: params.rightSourceId || null,
-    include_portfolio_analysis: true,
-    async_execution: params.asyncExecution,
-  };
-
-  const res = await fetch(`${BASE_URL}/api/v1/assurance/runs`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    cache: 'no-store',
-  });
-
-  return handleResponse(res);
-}
-
 export async function getAssuranceRun(runId: string): Promise<AssuranceRunRecord> {
   const res = await fetch(`${BASE_URL}/api/v1/assurance/runs/${runId}`, {
     cache: 'no-store',

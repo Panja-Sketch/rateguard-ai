@@ -40,16 +40,16 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true }: Portfol
     return new Intl.NumberFormat('en-US').format(val);
   };
 
-  const totalPolicies = portfolio.total_policies || 50000;
-  const exposedCount = portfolio.exposed_policy_count ?? (portfolio as any).semantically_exposed ?? 0;
+  const totalPolicies = portfolio.total_policies_analyzed ?? portfolio.total_policies ?? 50000;
+  const exposedCount = portfolio.semantically_exposed_count ?? portfolio.exposed_policy_count ?? (portfolio as any).semantically_exposed ?? 0;
   const affectedCount = portfolio.financially_affected_count ?? (portfolio as any).financially_affected ?? 0;
   const behaviorCount = portfolio.behaviorally_affected_count ?? (portfolio as any).behaviorally_affected ?? affectedCount;
-  
+
   const exposedPct = portfolio.exposed_policy_pct ?? (totalPolicies > 0 ? Number(((exposedCount / totalPolicies) * 100).toFixed(2)) : 0);
   const affectedPct = portfolio.financially_affected_pct ?? (totalPolicies > 0 ? Number(((affectedCount / totalPolicies) * 100).toFixed(2)) : 0);
 
-  const absoluteVariance = portfolio.total_absolute_variance ?? (portfolio as any).absolute_variance ?? '0.00';
-  const signedVariance = portfolio.total_signed_variance ?? (portfolio as any).signed_variance ?? '0.00';
+  const absoluteVariance = portfolio.absolute_financial_exposure ?? portfolio.total_absolute_variance ?? (portfolio as any).absolute_variance ?? '0.00';
+  const signedVariance = portfolio.signed_net_variance ?? portfolio.total_signed_variance ?? (portfolio as any).signed_variance ?? '0.00';
 
   const underchargeCount = portfolio.undercharged_policy_count ?? 0;
   const underchargeAmount = portfolio.total_undercharge_amount ?? (portfolio as any).undercharge_amount ?? '0.00';

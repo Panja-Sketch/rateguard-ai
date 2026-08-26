@@ -27,7 +27,9 @@ from app.agents.decision_schemas import (
 )
 from app.agents.gemini_client import GeminiDecisionClient, GeminiInvocationEvidence
 from app.engines.diff import SemanticDiffEngine
-from app.engines.impact import PricingImpactEngine
+from app.engines.diff.models import SemanticDiffResult
+from app.engines.impact import ImpactAnalysis, PricingImpactEngine
+from app.engines.impact.predicates import derive_predicates_from_package
 from app.engines.oracle.calculator import PremiumOracleCalculator
 from app.engines.portfolio import PortfolioExposureAnalyzer
 from app.engines.reconciliation import PricingReconciliationEngine
@@ -725,6 +727,26 @@ class AssuranceSupervisor:
                 latency_ms=imp_latency,
             )
             agent_actions.append(action_imp)
+        elif mission.mode == ComparisonMode.RUNTIME_VERIFICATION and mission.runtime_connector:
+            # No Source B / diff to key off of: boundary conditions worth
+            # probing against the black-box endpoint are derived directly
+            # from Source A's own rate table range dimensions instead.
+            self_predicates = derive_predicates_from_package(left_pkg)
+            raw_diff_result = SemanticDiffResult(
+                left_package_id=left_pkg.id,
+                right_package_id=left_pkg.id,
+                left_version=left_pkg.version,
+                right_version=left_pkg.version,
+                differences=[],
+            )
+            raw_impact = ImpactAnalysis(
+                package_id=left_pkg.id,
+                candidate_risk_predicates=self_predicates,
+            )
+            result.impact_analysis = SectionResult(
+                status=AnalysisStatus.NOT_RUN,
+                reason="Dependency impact graph traversal skipped for Black-Box Runtime Verification.",
+            )
         else:
             raw_impact = None
             result.impact_analysis = SectionResult(

@@ -4,14 +4,31 @@ from pydantic import ValidationError
 
 from app.agents.supervisor import AssuranceSupervisor
 from app.api.assurance import resolve_demo_package
+from app.ipir.package import IPIRPackage
 from app.messaging.models import AssuranceJob
 from app.messaging.outcomes import ProcessingOutcome, ProcessingResult, safe_error_text
-from app.models.mission import AssuranceMission, MissionStatus
+from app.models.mission import AssuranceMission, MissionStatus, PricingSourceRef
 from app.services.mission_transitions import apply_transition
 from app.storage import AssuranceRunStatus, get_run_store
+from app.storage.artifacts import get_artifact_store
 from app.storage.interfaces import LeaseOutcome
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_source_package(source_ref: PricingSourceRef) -> IPIRPackage:
+    """Resolves a mission source to its IPIR package.
+
+    Real uploaded/compiled sources (source_type == "FILE") are read back from
+    the artifact store using the compiled IPIR artifact id assigned at compile
+    time (see PricingSourceIngestionService.compile_source). Built-in demo/
+    sample sources fall back to the bundled-file resolver.
+    """
+    if source_ref.source_type == "FILE":
+        content = get_artifact_store().get_artifact_content(f"IPIR-{source_ref.source_id}")
+        if content:
+            return IPIRPackage.model_validate_json(content)
+    return resolve_demo_package(source_ref.source_id)
 
 
 def _safe_log_event(store, run_id: str, stage: str, message: str, details: dict | None = None) -> None:
@@ -199,8 +216,8 @@ class MissionExecutionService:
             return bool(current.cancellation_requested or current_meta.get("cancellation_requested"))
 
         try:
-            left_pkg = resolve_demo_package(mission.source_a.source_id)
-            right_pkg = resolve_demo_package(mission.source_b.source_id) if mission.source_b else None
+            left_pkg = _resolve_source_package(mission.source_a)
+            right_pkg = _resolve_source_package(mission.source_b) if mission.source_b else None
 
             supervisor = AssuranceSupervisor(store)
             result = supervisor.run_mission(mission, left_pkg, right_pkg, cancellation_check=_cancellation_requested)

@@ -279,6 +279,10 @@ def list_assurance_missions(
 
         if status_filter and status_val.upper() != status_filter.upper():
             continue
+        # Archived missions are hidden from the default (unfiltered) history view
+        # and only ever surfaced when explicitly requested via the status filter.
+        if not status_filter and status_val.upper() == "ARCHIVED":
+            continue
         if mode_filter and mode_val.upper() != mode_filter.upper():
             continue
         if decision_filter and (r.decision or "").upper() != decision_filter.upper():

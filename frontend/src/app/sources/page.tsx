@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { uploadSourceFile, compileSource, startAssuranceRun } from '@/lib/api/client';
+import { uploadSourceFile, compileSource, createAssuranceMission } from '@/lib/api/client';
 import { SourceDescriptor } from '@/lib/types/assurance';
 import {
   FileCode2,
@@ -113,15 +113,46 @@ export default function SourcesPage() {
     setRunning(true);
     setError(null);
     try {
-      const res = await startAssuranceRun({
-        leftSourceId: hasRealSources ? sourceA?.source_id : undefined,
-        rightSourceId: hasRealSources ? sourceB?.source_id : undefined,
-        leftPackageId: hasRealSources ? compiledA.ipir_package_id : DEMO_LEFT_PACKAGE_ID,
-        rightPackageId: hasRealSources ? compiledB.ipir_package_id : DEMO_RIGHT_PACKAGE_ID,
-        asyncExecution: true,
+      const sourceARef = hasRealSources
+        ? {
+            source_id: sourceA!.source_id,
+            source_type: 'FILE',
+            name: sourceA!.name,
+            compiled_package_id: compiledA.ipir_package_id,
+          }
+        : {
+            source_id: DEMO_LEFT_PACKAGE_ID,
+            source_type: 'SAMPLE_RELEASE',
+            name: 'Arizona HO3 Actuarial Spec (Canonical Filing Intent)',
+          };
+      const sourceBRef = hasRealSources
+        ? {
+            source_id: sourceB!.source_id,
+            source_type: 'FILE',
+            name: sourceB!.name,
+            compiled_package_id: compiledB.ipir_package_id,
+          }
+        : {
+            source_id: DEMO_RIGHT_PACKAGE_ID,
+            source_type: 'SAMPLE_RELEASE',
+            name: 'Arizona HO3 Target Rating Engine Implementation',
+          };
+
+      const res = await createAssuranceMission({
+        name: 'Assurance Mission Launched from Sources',
+        mode: 'RELEASE_CONFORMANCE',
+        product: 'AZ_HO3',
+        jurisdiction: 'Arizona',
+        effective_period_start: '2026-09-01',
+        portfolio_dataset: 'az_ho3_2026_synthetic_50k.csv',
+        gating_policy: 'STRICT_ZERO_DRIFT',
+        source_a: sourceARef,
+        source_b: sourceBRef,
+        disposable_sample_run: true,
+        is_demo_sample: !hasRealSources,
       });
-      if (res.run_id) {
-        router.push(`/runs/${res.run_id}`);
+      if (res.mission_id) {
+        router.push(`/missions/${res.mission_id}`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

@@ -261,6 +261,28 @@ def test_archive_queued_mission_returns_409():
     assert res.status_code == 409
 
 
+def test_archived_mission_hidden_from_default_list_but_visible_via_status_filter():
+    """Archived missions must not appear in the default (unfiltered) history
+    view, but must still be retrievable by explicitly filtering status=ARCHIVED."""
+    store = get_run_store()
+    store.save_run(AssuranceRunRecord(
+        run_id="MIS-ARCHIVE-03", status=AssuranceRunStatus.COMPLETED,
+        metadata={"record_type": "ASSURANCE_MISSION_V2"},
+    ))
+    archive_res = client.post("/api/v1/missions/MIS-ARCHIVE-03/archive")
+    assert archive_res.status_code == 200
+
+    default_res = client.get("/api/v1/missions")
+    assert default_res.status_code == 200
+    default_ids = [m["mission_id"] for m in default_res.json()["missions"]]
+    assert "MIS-ARCHIVE-03" not in default_ids
+
+    archived_res = client.get("/api/v1/missions?status=ARCHIVED")
+    assert archived_res.status_code == 200
+    archived_ids = [m["mission_id"] for m in archived_res.json()["missions"]]
+    assert "MIS-ARCHIVE-03" in archived_ids
+
+
 def test_delete_queued_mission_returns_409_not_deleted():
     """QUEUED missions are not directly deletable — they must be cancelled first."""
     store = get_run_store()
