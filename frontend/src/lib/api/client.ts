@@ -315,6 +315,22 @@ export async function uploadSourceFile(file: File): Promise<SourceDescriptor> {
   return handleResponse<SourceDescriptor>(res);
 }
 
+export interface CompilationReceipt {
+  product: string;
+  product_line: string;
+  jurisdiction: string;
+  effective_period_start: string;
+  effective_period_end: string | null;
+  input_count: number;
+  constant_count: number;
+  table_count: number;
+  table_row_count: number;
+  rule_count: number;
+  calculation_count: number;
+  output_count: number;
+  output_node_ids: string[];
+}
+
 export async function compileSource(sourceId: string): Promise<{
   source_id: string;
   adapter_id: string;
@@ -323,6 +339,7 @@ export async function compileSource(sourceId: string): Promise<{
   confidence: number;
   warnings: string[];
   requires_human_review: boolean;
+  compilation_receipt: CompilationReceipt;
   ipir_package: unknown;
 }> {
   const res = await fetch(`${BASE_URL}/api/v1/sources/${sourceId}/compile`, {

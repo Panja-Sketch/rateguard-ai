@@ -226,6 +226,78 @@ def create_assurance_mission(
     }
 
 
+# `BaseRunStore.list_runs` has no where()/cursor support -- it is purely
+# "N most recent by created_at". Every actual filter (legacy/demo/status/
+# mode/decision) is applied in this endpoint AFTER that fetch, so a fixed,
+# small fetch window can silently starve real missions out of the result
+# entirely (not just out of the displayed page) if enough of the most-recent
+# records happen to be demo/legacy/archived. MAX_SCAN_RECORDS bounds how far
+# this endpoint will widen the fetch window looking for enough matches.
+MAX_SCAN_RECORDS = 2000
+
+
+def _mission_matches_filters(
+    r: Any,
+    meta: dict[str, Any],
+    include_legacy: bool,
+    include_demo_samples: bool,
+    status_filter: str | None,
+    mode_filter: str | None,
+    decision_filter: str | None,
+) -> bool:
+    is_v2 = (
+        r.run_id.startswith("MIS-")
+        or meta.get("record_type") == "ASSURANCE_MISSION_V2"
+        or meta.get("schema_version") == 2
+    )
+    if not include_legacy and not is_v2:
+        return False
+
+    is_demo_sample = meta.get("is_demo_sample", meta.get("disposable_sample_run", False))
+    if not include_demo_samples and is_demo_sample:
+        return False
+
+    status_val = r.status.value if hasattr(r.status, "value") else str(r.status)
+    mode_val = meta.get("mode") or "RELEASE_CONFORMANCE"
+
+    if status_filter and status_val.upper() != status_filter.upper():
+        return False
+    # Archived missions are hidden from the default (unfiltered) history view
+    # and only ever surfaced when explicitly requested via the status filter.
+    if not status_filter and status_val.upper() == "ARCHIVED":
+        return False
+    if mode_filter and mode_val.upper() != mode_filter.upper():
+        return False
+    if decision_filter and (r.decision or "").upper() != decision_filter.upper():
+        return False
+    return True
+
+
+def _mission_summary(r: Any, meta: dict[str, Any]) -> dict[str, Any]:
+    status_val = r.status.value if hasattr(r.status, "value") else str(r.status)
+    return {
+        "mission_id": r.run_id,
+        "name": meta.get("name") or f"Assurance Mission ({r.run_id})",
+        "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+        "updated_at": r.updated_at.isoformat() if hasattr(r.updated_at, "isoformat") else str(r.updated_at),
+        "status": status_val,
+        "status_reason": r.status_reason,
+        "current_stage": r.current_stage,
+        "workflow_stage": r.workflow_stage,
+        "attempt_number": r.attempt_number,
+        "mode": meta.get("mode") or "RELEASE_CONFORMANCE",
+        # No hidden defaults: a mission with no source_b displays as null, never
+        # as the bundled defective sample package.
+        "source_a": r.left_package_id or meta.get("source_a"),
+        "source_b": r.right_package_id or meta.get("source_b"),
+        "decision": r.decision or "UNKNOWN",
+        "summary": r.summary or "",
+        "disposable_sample_run": meta.get("disposable_sample_run", False),
+        "is_demo_sample": meta.get("is_demo_sample", meta.get("disposable_sample_run", False)),
+        "eligible_actions": eligible_actions(r),
+    }
+
+
 @router.get("/missions")
 def list_assurance_missions(
     limit: int = Query(default=50, ge=1, le=200),
@@ -236,62 +308,36 @@ def list_assurance_missions(
     include_legacy: bool = Query(default=False),
     include_demo_samples: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """Lists Mission V2 assurance records with pagination and filtering."""
+    """Lists Mission V2 assurance records with pagination and filtering.
+
+    Fetches a progressively wider window from the store (never just the
+    first fixed-size batch) until enough post-filter matches are gathered to
+    fill `offset + limit`, the store itself runs out of records, or
+    MAX_SCAN_RECORDS is reached -- so a real mission can never be silently
+    starved out of the list just because more-recent records were demo or
+    legacy records that got filtered out afterward.
+    """
     store = get_run_store()
-    records = store.list_runs(limit=limit + offset + 50)
 
-    mission_list = []
-    for r in records:
-        meta = r.metadata if isinstance(r.metadata, dict) else {}
-        is_v2 = (
-            r.run_id.startswith("MIS-")
-            or meta.get("record_type") == "ASSURANCE_MISSION_V2"
-            or meta.get("schema_version") == 2
-        )
-        if not include_legacy and not is_v2:
-            continue
+    needed = offset + limit
+    window = min(needed + 50, MAX_SCAN_RECORDS)
+    mission_list: list[dict[str, Any]] = []
+    records: list[Any] = []
 
-        is_demo_sample = meta.get("is_demo_sample", meta.get("disposable_sample_run", False))
-        if not include_demo_samples and is_demo_sample:
-            continue
+    while True:
+        records = store.list_runs(limit=window)
+        mission_list = []
+        for r in records:
+            meta = r.metadata if isinstance(r.metadata, dict) else {}
+            if _mission_matches_filters(
+                r, meta, include_legacy, include_demo_samples,
+                status_filter, mode_filter, decision_filter,
+            ):
+                mission_list.append(_mission_summary(r, meta))
 
-        status_val = r.status.value if hasattr(r.status, "value") else str(r.status)
-        mode_val = meta.get("mode") or "RELEASE_CONFORMANCE"
-
-        if status_filter and status_val.upper() != status_filter.upper():
-            continue
-        # Archived missions are hidden from the default (unfiltered) history view
-        # and only ever surfaced when explicitly requested via the status filter.
-        if not status_filter and status_val.upper() == "ARCHIVED":
-            continue
-        if mode_filter and mode_val.upper() != mode_filter.upper():
-            continue
-        if decision_filter and (r.decision or "").upper() != decision_filter.upper():
-            continue
-
-        mission_list.append(
-            {
-                "mission_id": r.run_id,
-                "name": meta.get("name") or f"Assurance Mission ({r.run_id})",
-                "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
-                "updated_at": r.updated_at.isoformat() if hasattr(r.updated_at, "isoformat") else str(r.updated_at),
-                "status": status_val,
-                "status_reason": r.status_reason,
-                "current_stage": r.current_stage,
-                "workflow_stage": r.workflow_stage,
-                "attempt_number": r.attempt_number,
-                "mode": mode_val,
-                # No hidden defaults: a mission with no source_b displays as null, never
-                # as the bundled defective sample package.
-                "source_a": r.left_package_id or meta.get("source_a"),
-                "source_b": r.right_package_id or meta.get("source_b"),
-                "decision": r.decision or "UNKNOWN",
-                "summary": r.summary or "",
-                "disposable_sample_run": meta.get("disposable_sample_run", False),
-                "is_demo_sample": meta.get("is_demo_sample", meta.get("disposable_sample_run", False)),
-                "eligible_actions": eligible_actions(r),
-            }
-        )
+        if len(mission_list) >= needed or len(records) < window or window >= MAX_SCAN_RECORDS:
+            break
+        window = min(window * 2, MAX_SCAN_RECORDS)
 
     paginated = mission_list[offset : offset + limit]
 

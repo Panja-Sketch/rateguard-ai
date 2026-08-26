@@ -487,6 +487,38 @@ class AssuranceSupervisor:
             data=[],
         )
 
+        # A source extracted with low confidence (flagged requires_human_review
+        # at compile time) must never silently support a PASS -- compilation
+        # uncertainty is one of the signals the release decision has to agree
+        # on, not just semantic/behavioral evidence.
+        compilation_uncertain = bool(mission.source_a.requires_human_review) or bool(
+            mission.source_b and mission.source_b.requires_human_review
+        )
+
+        # Comparing two genuinely different insurance products or jurisdictions
+        # is not a meaningful equivalence/conformance check -- a metadata
+        # mismatch between the two compiled sources must surface as its own
+        # signal, never be silently absorbed into "0 semantic differences".
+        review_reasons: list[str] = []
+        if compilation_uncertain:
+            review_reasons.append("Source extraction confidence was flagged for human review.")
+        if right_pkg is not None:
+            if left_pkg.product.line != right_pkg.product.line:
+                review_reasons.append(
+                    f"Source A is product line '{left_pkg.product.line.value}' but Source B is "
+                    f"'{right_pkg.product.line.value}' -- these are not the same insurance product."
+                )
+            elif (
+                left_pkg.product.jurisdiction.state_or_province != right_pkg.product.jurisdiction.state_or_province
+                or left_pkg.product.jurisdiction.country != right_pkg.product.jurisdiction.country
+            ):
+                left_jur = left_pkg.product.jurisdiction.state_or_province or left_pkg.product.jurisdiction.country
+                right_jur = right_pkg.product.jurisdiction.state_or_province or right_pkg.product.jurisdiction.country
+                review_reasons.append(
+                    f"Source A jurisdiction ({left_jur}) does not match Source B jurisdiction ({right_jur})."
+                )
+        review_required = bool(review_reasons)
+
         if self._is_cancelled(mission.mission_id, cancellation_check):
             return self._finalize_cancelled(mission, result, agent_actions)
 
@@ -651,38 +683,129 @@ class AssuranceSupervisor:
                     )
                 )
 
+            real_match_count = sum(1 for e in experiments_list if e.matches)
+            real_mismatch_count = len(experiments_list) - real_match_count
+
             result.experiments = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
                 data=ExperimentsData(
                     total_generated=len(test_cases),
                     total_executed=len(test_cases),
-                    match_count=len(test_cases),
-                    mismatch_count=0,
+                    match_count=real_match_count,
+                    mismatch_count=real_mismatch_count,
                     reduction_pct=test_plan.coverage_metrics.get("candidate_reduction_pct", 0.0),
                     experiments=experiments_list,
                 ),
             )
 
-            result.blast_radius = SectionResult(
+            if real_mismatch_count == 0:
+                result.blast_radius = SectionResult(
+                    status=AnalysisStatus.SUCCEEDED,
+                    data=BlastRadiusResult(
+                        total_policies_analyzed=50000,
+                        semantically_exposed_count=0,
+                        behaviorally_affected_count=0,
+                        financially_affected_count=0,
+                        absolute_financial_exposure="0.00",
+                        signed_net_variance="0.00",
+                    ),
+                )
+
+                if review_required:
+                    result.release_decision = SectionResult(
+                        status=AnalysisStatus.SUCCEEDED,
+                        data=ReleaseDecision(
+                            status="REVIEW_REQUIRED",
+                            confidence_score=1.0,
+                            summary=(
+                                "Semantic and behavioral evidence agree, but this mission cannot issue a "
+                                "PASS: " + " ".join(review_reasons)
+                            ),
+                            blocking_reasons=review_reasons,
+                            recommendation="Resolve the flagged issue, then re-run assurance verification.",
+                        ),
+                    )
+                else:
+                    result.release_decision = SectionResult(
+                        status=AnalysisStatus.SUCCEEDED,
+                        data=ReleaseDecision(
+                            status="PASS",
+                            confidence_score=1.0,
+                            summary="Full behavioral and semantic equivalence verified. Zero pricing drift or financial exposure detected.",
+                            blocking_reasons=[],
+                            recommendation="Approve pricing engine release for production deployment.",
+                        ),
+                    )
+
+                result.overall_status = "COMPLETED"
+                mission.status = MissionStatus.COMPLETED
+                self._update_mission_record(mission, result, agent_actions)
+                return result
+
+            # A behavioral mismatch was reproduced despite ZERO detected AST
+            # differences -- the static semantic-diff comparison has a
+            # coverage gap it did not catch. A false PASS here is strictly
+            # worse than an explicit block: the release decision must be
+            # conservative and agree across ALL evidence, not just the
+            # semantic layer. Never silently discard this signal.
+            first_mismatch = next(e for e in experiments_list if not e.matches)
+            action_gap = AgentAction(
+                action_id=f"ACT-{uuid.uuid4().hex[:6].upper()}",
+                agent_role="Assurance Supervisor",
+                action_type="REASONING",
+                summary=(
+                    f"Semantic-diff blind spot: 0 AST differences detected, but "
+                    f"{real_mismatch_count} of {len(experiments_list)} behavioral verification "
+                    f"probes reproduced a premium mismatch."
+                ),
+                rationale="Behavioral evidence contradicts the static AST comparison. Release cannot be approved on semantic agreement alone.",
+                latency_ms=15.0,
+            )
+            agent_actions.append(action_gap)
+
+            result.reconciliation = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
-                data=BlastRadiusResult(
-                    total_policies_analyzed=50000,
-                    semantically_exposed_count=0,
-                    behaviorally_affected_count=0,
-                    financially_affected_count=0,
-                    absolute_financial_exposure="0.00",
-                    signed_net_variance="0.00",
+                data=ReconciliationData(
+                    mismatch_count=real_mismatch_count,
+                    first_divergent_node="semantic_diff_blind_spot",
+                    root_cause=RootCauseFinding(
+                        node_id="semantic_diff_blind_spot",
+                        title="Semantic Diff Coverage Gap",
+                        explanation=(
+                            f"AST semantic comparison reported 0 differences, but behavioral "
+                            f"verification scenario '{first_mismatch.probe_name}' reproduced a "
+                            f"premium mismatch: expected {first_mismatch.expected_premium}, "
+                            f"target returned {first_mismatch.actual_premium}. The static "
+                            f"comparison did not capture a real behavioral difference between "
+                            f"the two implementations."
+                        ),
+                        expected_value=first_mismatch.expected_premium,
+                        actual_value=first_mismatch.actual_premium,
+                        divergence_type="SEMANTIC_DIFF_BLIND_SPOT",
+                    ),
                 ),
             )
-
+            result.blast_radius = SectionResult(
+                status=AnalysisStatus.NOT_RUN,
+                reason="Portfolio scan skipped pending root-cause triage of the semantic-diff blind spot.",
+            )
             result.release_decision = SectionResult(
                 status=AnalysisStatus.SUCCEEDED,
                 data=ReleaseDecision(
-                    status="PASS",
+                    status="BLOCK_DEPLOYMENT",
                     confidence_score=1.0,
-                    summary="Full behavioral and semantic equivalence verified. Zero pricing drift or financial exposure detected.",
-                    blocking_reasons=[],
-                    recommendation="Approve pricing engine release for production deployment.",
+                    summary=(
+                        f"{real_mismatch_count} of {len(experiments_list)} behavioral verification "
+                        f"probes reproduced a premium mismatch despite 0 detected AST differences."
+                    ),
+                    blocking_reasons=[
+                        f"{real_mismatch_count} behavioral mismatch(es) reproduced despite a clean "
+                        "semantic AST comparison -- semantic-diff coverage gap."
+                    ],
+                    recommendation=(
+                        "Do not deploy. Investigate why the semantic diff engine did not detect a "
+                        "difference that produces divergent runtime premiums."
+                    ),
                 ),
             )
 
@@ -1221,6 +1344,14 @@ class AssuranceSupervisor:
             decision_status = "BLOCK_DEPLOYMENT"
             summary_msg = f"Deployment blocked due to {len(blocking_reasons)} critical pricing drift findings."
             rec_msg = "Apply proposed rating engine remediation patch and re-run assurance verification before releasing."
+        elif review_required:
+            # Every other signal agrees, but compilation uncertainty and/or a
+            # product/jurisdiction mismatch between the two sources was
+            # flagged -- that must never be silently absorbed into a PASS.
+            decision_status = "REVIEW_REQUIRED"
+            summary_msg = "No pricing drift found, but this mission cannot issue a PASS: " + " ".join(review_reasons)
+            rec_msg = "Resolve the flagged issue, then re-run assurance verification."
+            blocking_reasons = review_reasons
         else:
             decision_status = "PASS"
             summary_msg = "Assurance mission verified full compliance and equivalence."

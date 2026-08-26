@@ -1,5 +1,10 @@
+from decimal import Decimal
+from unittest.mock import patch
+
 from app.agents.supervisor import AssuranceSupervisor
 from app.api.assurance import resolve_demo_package
+from app.engines.oracle.calculator import CalcResult, PremiumOracleCalculator
+from app.ipir.enums import InsuranceLine
 from app.models.mission import (
     AssuranceMission,
     ComparisonMode,
@@ -45,6 +50,108 @@ def test_supervisor_clean_equivalence():
     res = supervisor.run_mission(mission, left_pkg, right_pkg)
     assert res.release_decision.data.status == "PASS"
     assert res.semantic_analysis.data.difference_count == 0
+
+
+def test_supervisor_blocks_when_semantic_diff_misses_a_behavioral_mismatch():
+    """Regression test for a false PASS: a real production mission reported
+    PASS because 0 AST semantic differences were found, even though the
+    Premium Oracle actually computed different premiums for Source A vs
+    Source B ($520.00 vs $610.00) among the clean-equivalence verification
+    probes -- that mismatch was silently discarded (mismatch_count was
+    hardcoded to 0 in that branch) instead of gating the decision. For a
+    pricing-assurance tool, a false PASS is worse than an explicit block:
+    the release decision must agree across ALL evidence, not semantic
+    AST comparison alone."""
+    store = InMemoryRunStore()
+    supervisor = AssuranceSupervisor(store)
+
+    pkg = resolve_demo_package("AZ_HO3_2026_09")
+
+    call_count = {"n": 0}
+    real_calculate = PremiumOracleCalculator.calculate_policy_premium
+
+    def fake_calculate(self, risk_inputs):
+        call_count["n"] += 1
+        result = real_calculate(self, risk_inputs)
+        # The oracle/target calculators are invoked alternately per probe
+        # (expected, then actual) -- force a mismatch on the very first
+        # probe's target-side calculation only.
+        if call_count["n"] == 2:
+            return CalcResult(final_premium=result.final_premium + Decimal("90.00"), trace=result.trace)
+        return result
+
+    mission = AssuranceMission(
+        mission_id="MIS-BLINDSPOT-01",
+        name="Semantic Diff Blind Spot Mission",
+        mode=ComparisonMode.EQUIVALENCE,
+        objective=MissionObjective(product="AZ_HO3", jurisdiction="Arizona", effective_period_start="2026-09-01"),
+        source_a=PricingSourceRef(source_id="AZ_HO3_2026_09", source_type="SAMPLE_RELEASE", name="Source A"),
+        source_b=PricingSourceRef(source_id="AZ_HO3_2026_09", source_type="SAMPLE_RELEASE", name="Source B"),
+    )
+
+    with patch.object(PremiumOracleCalculator, "calculate_policy_premium", fake_calculate):
+        res = supervisor.run_mission(mission, pkg, pkg)
+
+    assert res.semantic_analysis.data.difference_count == 0
+    assert res.experiments.data.mismatch_count > 0
+    assert res.release_decision.data.status == "BLOCK_DEPLOYMENT"
+    assert res.release_decision.data.status != "PASS"
+
+
+def test_supervisor_downgrades_pass_to_review_required_on_low_confidence_extraction():
+    """A source flagged requires_human_review at compile time (low
+    extraction confidence) must never silently support a PASS, even when
+    every other signal (semantic + behavioral) agrees the sources match."""
+    store = InMemoryRunStore()
+    supervisor = AssuranceSupervisor(store)
+
+    left_pkg = resolve_demo_package("AZ_HO3_2026_09")
+    right_pkg = resolve_demo_package("AZ_HO3_2026_09_CLEAN")
+
+    mission = AssuranceMission(
+        mission_id="MIS-UNCERTAIN-01",
+        name="Low Confidence Extraction Mission",
+        mode=ComparisonMode.EQUIVALENCE,
+        objective=MissionObjective(product="AZ_HO3", jurisdiction="Arizona", effective_period_start="2026-09-01"),
+        source_a=PricingSourceRef(
+            source_id="SRC-UNCERTAIN", source_type="FILE", name="Ambiguous Upload",
+            requires_human_review=True,
+        ),
+        source_b=PricingSourceRef(source_id="AZ_HO3_2026_09_CLEAN", source_type="SAMPLE_RELEASE", name="Clean Target"),
+    )
+
+    res = supervisor.run_mission(mission, left_pkg, right_pkg)
+    assert res.semantic_analysis.data.difference_count == 0
+    assert res.release_decision.data.status == "REVIEW_REQUIRED"
+    assert res.release_decision.data.status != "PASS"
+
+
+def test_supervisor_flags_review_required_on_product_line_mismatch():
+    """Comparing two genuinely different insurance products (e.g. a
+    Homeowners source against a Personal Auto source) is not a meaningful
+    equivalence check -- this metadata inconsistency must surface as its
+    own signal and prevent PASS, not be silently absorbed into "0 semantic
+    differences found" just because the two ASTs happen not to overlap."""
+    store = InMemoryRunStore()
+    supervisor = AssuranceSupervisor(store)
+
+    left_pkg = resolve_demo_package("AZ_HO3_2026_09")
+    right_pkg = resolve_demo_package("AZ_HO3_2026_09_CLEAN").model_copy(deep=True)
+    right_pkg.product.line = InsuranceLine.PERSONAL_AUTO
+
+    mission = AssuranceMission(
+        mission_id="MIS-METAMISMATCH-01",
+        name="Product Line Mismatch Mission",
+        mode=ComparisonMode.EQUIVALENCE,
+        objective=MissionObjective(product="AZ_HO3", jurisdiction="Arizona", effective_period_start="2026-09-01"),
+        source_a=PricingSourceRef(source_id="AZ_HO3_2026_09", source_type="SAMPLE_RELEASE", name="Source A"),
+        source_b=PricingSourceRef(source_id="AZ_HO3_2026_09_CLEAN", source_type="SAMPLE_RELEASE", name="Source B"),
+    )
+
+    res = supervisor.run_mission(mission, left_pkg, right_pkg)
+    assert res.release_decision.data.status == "REVIEW_REQUIRED"
+    assert res.release_decision.data.status != "PASS"
+    assert any("product line" in reason for reason in res.release_decision.data.blocking_reasons)
 
 
 def test_supervisor_defective_conformance_and_remediation():

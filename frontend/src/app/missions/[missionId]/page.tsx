@@ -35,6 +35,7 @@ import {
   TrendingDown,
   Clock,
   ArrowLeft,
+  ArrowRight,
   Sliders,
   Ban,
   RotateCcw,
@@ -68,6 +69,11 @@ export default function MissionDetailPage() {
   const [retrying, setRetrying] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  // In symmetric Equivalence mode, neither source is authoritative, but a
+  // directional patch computation inherently has to pick one side as the
+  // reference. That assumption must be explicit and opt-in, never presented
+  // as an unqualified regulatory conclusion by default.
+  const [alignmentBaselineConfirmed, setAlignmentBaselineConfirmed] = useState(false);
 
   const [activeTab, setActiveTab] = useState<
     'summary' | 'semantic' | 'impact' | 'experiments' | 'recon' | 'blast' | 'remediation' | 'evidence' | 'agent'
@@ -505,7 +511,7 @@ export default function MissionDetailPage() {
               { id: 'experiments', label: 'Boundary Experiments', icon: Sparkles },
               { id: 'recon', label: 'Reconciliation & RCA', icon: Sliders },
               { id: 'blast', label: 'Blast Radius & Telemetry', icon: BarChart3 },
-              { id: 'remediation', label: 'Remediation & Revalidation', icon: Check },
+              { id: 'remediation', label: isEquivalence ? 'Alignment Options' : 'Remediation & Revalidation', icon: Check },
               { id: 'evidence', label: 'Evidence Lineage', icon: Database },
               { id: 'agent', label: 'Gemini Action Timeline', icon: Bot },
             ].map((tab) => {
@@ -632,30 +638,56 @@ export default function MissionDetailPage() {
             )
           )}
 
-          {/* Tab 7: Remediation & Revalidation */}
+          {/* Tab 7: Remediation & Revalidation / Alignment Options */}
           {activeTab === 'remediation' && (
             remediationSec?.status === 'SUCCEEDED' && remediationSec?.data ? (
+              isEquivalence && !alignmentBaselineConfirmed ? (
+                <div className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-6 space-y-4 text-center">
+                  <AlertTriangle className="h-8 w-8 text-amber-400 mx-auto" />
+                  <div className="text-sm font-bold text-amber-200">
+                    Equivalence mode does not treat either source as authoritative
+                  </div>
+                  <p className="text-xs text-amber-200/80 max-w-lg mx-auto leading-relaxed">
+                    A directional alignment patch has to reference one side. The computation below assumes{' '}
+                    <strong>Source A as the reference point</strong> — that is a computational necessity, not a
+                    finding that Source A is correct. Confirm to view what changing Source B to match Source A
+                    would look like.
+                  </p>
+                  <button
+                    onClick={() => setAlignmentBaselineConfirmed(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-500"
+                  >
+                    View alignment options (Source A as reference) <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
               <div className="space-y-6">
                 <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      <Check className="h-5 w-5 text-sky-400" /> {remediationSec.data.title}
+                      <Check className="h-5 w-5 text-sky-400" /> {isEquivalence ? 'Alignment Option (relative to Source A)' : remediationSec.data.title}
                     </h3>
                     <span className="font-mono text-xs text-sky-300 rounded bg-sky-950 px-2.5 py-0.5 border border-sky-800">
                       {remediationSec.data.derived_package_id}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-300 leading-relaxed">{remediationSec.data.rationale}</p>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {isEquivalence
+                      ? 'Neither source is authoritative in Equivalence mode. Shown below is one possible alignment: the changes that would make Source B compute the same premiums as Source A for the scenarios tested.'
+                      : remediationSec.data.rationale}
+                  </p>
 
                   {/* Changes List */}
                   <div className="space-y-2 pt-2">
-                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Proposed Modifications</div>
+                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      {isEquivalence ? 'Difference by scenario' : 'Proposed Modifications'}
+                    </div>
                     {Object.entries(remediationSec.data.proposed_changes || {}).map(([key, val]: any) => (
                       <div key={key} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs font-mono space-y-1">
                         <div className="font-bold text-sky-300">{val.title || key}</div>
                         <div className="grid grid-cols-2 gap-2 text-[11px]">
                           <div>{isEquivalence ? 'Source B (current):' : 'Target Value:'} <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
-                          <div>Proposed Value: <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
+                          <div>{isEquivalence ? 'Source A (reference):' : 'Proposed Value:'} <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
                         </div>
                       </div>
                     ))}
@@ -667,22 +699,22 @@ export default function MissionDetailPage() {
                   <div className="rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-5 space-y-4 shadow-xl">
                     <div className="flex items-center justify-between border-b border-emerald-800/60 pb-3">
                       <h4 className="text-sm font-bold text-emerald-300 flex items-center gap-2">
-                        <TrendingDown className="h-4 w-4 text-emerald-400" /> Remediation Revalidation Analysis
+                        <TrendingDown className="h-4 w-4 text-emerald-400" /> {isEquivalence ? 'Alignment Impact Analysis' : 'Remediation Revalidation Analysis'}
                       </h4>
                       <span className="font-mono text-xs font-bold text-emerald-400">
-                        {revalidationSec.data.exposure_eliminated_pct}% Exposure Eliminated
+                        {revalidationSec.data.exposure_eliminated_pct}% {isEquivalence ? 'Difference Eliminated' : 'Exposure Eliminated'}
                       </span>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
                       <div className="rounded-lg border border-rose-900/60 bg-rose-950/30 p-3 space-y-1">
-                        <div className="text-rose-400 font-bold font-sans">BEFORE Remediation Exposure:</div>
+                        <div className="text-rose-400 font-bold font-sans">{isEquivalence ? 'BEFORE Alignment Difference:' : 'BEFORE Remediation Exposure:'}</div>
                         <div className="text-xl font-extrabold text-rose-300">${revalidationSec.data.before_absolute_exposure}</div>
                         <div className="text-[11px] text-slate-400">{revalidationSec.data.before_affected_policies} affected policies</div>
                       </div>
 
                       <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 p-3 space-y-1">
-                        <div className="text-emerald-400 font-bold font-sans">AFTER Remediation Exposure:</div>
+                        <div className="text-emerald-400 font-bold font-sans">{isEquivalence ? 'AFTER Alignment Difference:' : 'AFTER Remediation Exposure:'}</div>
                         <div className="text-xl font-extrabold text-emerald-300">${revalidationSec.data.after_absolute_exposure}</div>
                         <div className="text-[11px] text-slate-400">{revalidationSec.data.after_affected_policies} affected policies</div>
                       </div>
@@ -690,6 +722,7 @@ export default function MissionDetailPage() {
                   </div>
                 )}
               </div>
+              )
             ) : (
               <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
                 Status: {remediationSec?.status || 'NOT_RUN'} — {stageStatusLine('REMEDIATION', remediationSec)}

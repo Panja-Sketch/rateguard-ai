@@ -267,3 +267,46 @@ def test_ingestion_service_end_to_end_registers_hash_and_compiles_via_supervisor
     assert result.evidence["selected_extractor"] == "structured_json_direct_parser"
     assert result.evidence["selection_kind"] == "DETERMINISTIC"
     assert result.evidence["source_sha256"] == descriptor.metadata["sha256"]
+
+
+def test_ingestion_service_rejects_excel_and_pdf_uploads():
+    """Excel/PDF extraction is not implemented -- the adapters parse (or,
+    for PDF, don't even parse) the uploaded bytes and then silently
+    substitute the bundled canonical demo IPIR package regardless of actual
+    content. Until real, content-faithful extraction exists and is proven,
+    the ingestion boundary must fail closed rather than accept these
+    formats and misrepresent a fabricated compilation as genuine."""
+    from app.adapters.errors import SourceParsingError
+    from app.services.ingestion_service import PricingSourceIngestionService
+
+    service = PricingSourceIngestionService()
+
+    for filename, content_type in [
+        ("rate_spec.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("filing.pdf", "application/pdf"),
+    ]:
+        try:
+            service.register_source(filename=filename, content_type=content_type, content=b"irrelevant")
+            raise AssertionError(f"Expected SourceParsingError for {filename}")
+        except SourceParsingError as e:
+            assert "not yet supported" in str(e)
+
+
+def test_ingestion_service_namespaces_package_id_to_source_id():
+    """Two different uploads must never collide on the same compiled package
+    identity just because the uploaded content declares the same internal
+    `id` (e.g. copy-pasted from a shared template)."""
+    from app.services.ingestion_service import PricingSourceIngestionService
+
+    service = PricingSourceIngestionService()
+    content = (_DATA_DIR / "actuarial" / "AZ_HO3_2026_09_rate_spec.json").read_bytes()
+
+    desc_1 = service.register_source(filename="a.json", content_type="application/json", content=content)
+    desc_2 = service.register_source(filename="b.json", content_type="application/json", content=content)
+
+    result_1 = service.compile_source(desc_1)
+    result_2 = service.compile_source(desc_2)
+
+    assert result_1.ipir_package.id != result_2.ipir_package.id
+    assert desc_1.source_id in result_1.ipir_package.id
+    assert desc_2.source_id in result_2.ipir_package.id

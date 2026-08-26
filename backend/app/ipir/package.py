@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ipir.calculations import CalculationNode
 from app.ipir.common import EffectivePeriod, validate_identifier_string
@@ -32,6 +32,14 @@ class PricingConstant(BaseModel):
 
 class IPIRPackage(BaseModel):
     """Root canonical package containing an end-to-end executable IPIR pricing definition."""
+
+    # Unknown top-level fields (e.g. a friendly `rating_tables` instead of the
+    # required `tables`) must be rejected, not silently dropped -- a source
+    # that "compiles" successfully while its actual pricing content is
+    # discarded is exactly the false-confidence failure mode this tool
+    # exists to catch. This is what makes a typo'd or hand-rolled field name
+    # surface as a clear validation error instead of an empty package.
+    model_config = ConfigDict(extra="forbid")
 
     ipir_version: str = "0.1"
     id: str

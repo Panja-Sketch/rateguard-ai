@@ -38,15 +38,25 @@ class PricingSourceIngestionService:
         if ext == "json":
             fmt = SourceFormat.STRUCTURED_JSON
             cat = ArtifactCategory.SOURCE_JSON
-        elif ext in ("xlsx", "xls"):
-            fmt = SourceFormat.EXCEL
-            cat = ArtifactCategory.SOURCE_WORKBOOK
-        elif ext == "pdf":
-            fmt = SourceFormat.PDF
-            cat = ArtifactCategory.SOURCE_DOCUMENT
+        elif ext in ("xlsx", "xls", "pdf"):
+            # Excel and PDF extraction is not implemented: the adapters for
+            # these formats parse (or, for PDF, don't even parse) the
+            # uploaded bytes and then discard them, substituting the bundled
+            # canonical demo IPIR package regardless of actual content. That
+            # is fabrication, not extraction -- a pricing-assurance tool must
+            # fail closed rather than silently misrepresent an unverified
+            # extraction as a genuine compilation. Rejected here until real,
+            # content-faithful extraction exists and is proven end-to-end.
+            raise SourceParsingError(
+                f"'.{ext}' sources are not yet supported for verified extraction. "
+                "RateGuard only compiles native IPIR/structured JSON sources today "
+                "(see the sample template on the Sources page) -- Excel and PDF "
+                "support will be enabled once content-faithful extraction is "
+                "implemented and proven, not before."
+            )
         else:
             raise SourceParsingError(
-                f"Unsupported file extension '.{ext}'. Allowed: .json, .xlsx, .pdf"
+                f"Unsupported file extension '.{ext}'. Allowed: .json"
             )
 
         source_id = f"SRC-{uuid.uuid4().hex[:8].upper()}"
@@ -84,6 +94,17 @@ class PricingSourceIngestionService:
             )
 
         result = self.supervisor.extract_and_compile_source(source_descriptor, content)
+
+        # A package's `id` is declared by whatever the uploaded source itself
+        # says it is (e.g. copy-pasted from a shared template) -- nothing
+        # about it is guaranteed unique across different uploads. Two
+        # different sources that both declare the same id would otherwise
+        # collide, and one's evidence/artifacts could be mistaken for the
+        # other's. Every compiled package's identity is made unique to its
+        # own upload by namespacing it to the immutable source_id, while
+        # keeping the original declared id readable as a prefix.
+        original_package_id = result.ipir_package.id
+        result.ipir_package.id = f"{original_package_id}--{source_descriptor.source_id}"
 
         # Save compiled IPIR artifact
         ipir_json = result.ipir_package.model_dump_json(indent=2).encode("utf-8")

@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from app.engines.diff.enums import DifferenceType
@@ -6,7 +7,48 @@ from app.engines.diff.models import SemanticDiffResult
 from app.engines.impact.models import ImpactAnalysis
 from app.engines.testing.boundary_generator import generate_range_boundary_values
 from app.engines.testing.models import PricingTestScenario, ScenarioClassification
+from app.ipir.enums import InputDataType
 from app.ipir.package import IPIRPackage
+
+
+def _derive_base_risk(package: IPIRPackage) -> dict[str, Any]:
+    """Builds a representative baseline risk profile directly from the
+    package's own declared inputs, rather than assuming every compared
+    package is an Arizona Homeowners HO3 policy. A numeric input gets the
+    midpoint of its declared range (or whichever bound is present, or 0 if
+    neither is), a boolean gets False, and a category/string input gets its
+    first allowed value (or a neutral placeholder). DATE inputs are excluded
+    -- a scenario's own `effective_date` covers temporal probing already."""
+    base_risk: dict[str, Any] = {}
+    for inp in package.inputs:
+        if inp.allowed_values:
+            # An enumerated allow-list constrains the value regardless of the
+            # declared data type (e.g. a MONEY/INTEGER field like `deductible`
+            # can still only take specific tiers such as 500/1000/2500/5000)
+            # -- this must be checked before any type-specific fallback.
+            raw = inp.allowed_values[0]
+            if inp.data_type == InputDataType.INTEGER:
+                base_risk[inp.id] = int(raw)
+            elif inp.data_type in (InputDataType.DECIMAL, InputDataType.MONEY):
+                base_risk[inp.id] = Decimal(raw)
+            else:
+                base_risk[inp.id] = raw
+        elif inp.data_type == InputDataType.BOOLEAN:
+            base_risk[inp.id] = False
+        elif inp.data_type in (InputDataType.INTEGER, InputDataType.DECIMAL, InputDataType.MONEY):
+            if inp.minimum is not None and inp.maximum is not None:
+                mid = (Decimal(str(inp.minimum)) + Decimal(str(inp.maximum))) / 2
+                base_risk[inp.id] = int(mid) if inp.data_type == InputDataType.INTEGER else mid
+            elif inp.minimum is not None:
+                base_risk[inp.id] = inp.minimum
+            elif inp.maximum is not None:
+                base_risk[inp.id] = inp.maximum
+            else:
+                base_risk[inp.id] = 0
+        elif inp.data_type in (InputDataType.CATEGORY, InputDataType.STRING):
+            base_risk[inp.id] = "DEFAULT"
+        # DATE-type inputs intentionally excluded -- see docstring.
+    return base_risk
 
 
 def generate_candidate_scenarios(
@@ -23,18 +65,7 @@ def generate_candidate_scenarios(
     counter = 1
     pkg_start = package.effective_period.start
 
-    # Base baseline risk dictionary
-    base_risk: dict[str, Any] = {
-        "territory": "T05",
-        "roof_age": 10,
-        "deductible": 1000,
-        "protection_class": 3,
-        "construction_type": "FRAME",
-        "dwelling_limit": 350000,
-        "multi_policy": True,
-        "claims_free": True,
-        "claims_free_years": 5,
-    }
+    base_risk: dict[str, Any] = _derive_base_risk(package)
 
     # 1. Control Baseline Scenario
     candidates.append(
@@ -180,9 +211,17 @@ def generate_candidate_scenarios(
     ]
     if order_diffs:
         seq_risk = dict(base_risk)
-        seq_risk["dwelling_limit"] = 700000
-        seq_risk["multi_policy"] = False
-        seq_risk["claims_free"] = False
+        # These specific overrides are tuned to push an HO3-shaped policy
+        # past its minimum-premium floor; only apply them when the package
+        # actually declares these fields, so an unrelated product's risk
+        # profile never gets HO3-specific values injected into it.
+        for field, override_val in {
+            "dwelling_limit": 700000,
+            "multi_policy": False,
+            "claims_free": False,
+        }.items():
+            if field in seq_risk:
+                seq_risk[field] = override_val
 
         candidates.append(
             PricingTestScenario(

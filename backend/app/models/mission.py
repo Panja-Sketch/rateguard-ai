@@ -53,6 +53,10 @@ class PricingSourceRef(BaseModel):
     format: str | None = None
     hash_checksum: str | None = None
     compiled_package_id: str | None = None
+    # Carried through from the compile-time AdapterResult so the release
+    # decision can see it: a source extracted with low confidence and
+    # flagged for human review must never silently support a PASS.
+    requires_human_review: bool = False
 
 
 class AgentAction(BaseModel):
