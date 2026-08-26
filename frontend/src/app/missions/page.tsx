@@ -23,7 +23,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Clock,
-  Globe,
   Layers,
   ShieldCheck,
   X,
@@ -41,6 +40,7 @@ export default function MissionsHistoryPage() {
   const [modeFilter, setModeFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [decisionFilter, setDecisionFilter] = useState<string>('ALL');
+  const [showDemoSamples, setShowDemoSamples] = useState(false);
   const [page, setPage] = useState(0);
   const limit = 20;
 
@@ -65,6 +65,7 @@ export default function MissionsHistoryPage() {
         mode: modeFilter === 'ALL' ? undefined : modeFilter,
         status: statusFilter === 'ALL' ? undefined : statusFilter,
         decision: decisionFilter === 'ALL' ? undefined : decisionFilter,
+        includeDemoSamples: showDemoSamples,
       });
       // Only ever replaces the list on a SUCCESSFUL load — a failed request
       // (see catch below) leaves whatever was last successfully loaded in
@@ -75,7 +76,7 @@ export default function MissionsHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, modeFilter, statusFilter, decisionFilter]);
+  }, [page, limit, modeFilter, statusFilter, decisionFilter, showDemoSamples]);
 
   useEffect(() => {
     fetchMissions();
@@ -199,7 +200,6 @@ export default function MissionsHistoryPage() {
         >
           <option value="ALL">All Modes</option>
           <option value="RELEASE_CONFORMANCE">Release Conformance</option>
-          <option value="RUNTIME_VERIFICATION">Runtime Verification</option>
           <option value="EQUIVALENCE">Equivalence</option>
         </select>
 
@@ -233,6 +233,20 @@ export default function MissionsHistoryPage() {
           <option value="BLOCK_DEPLOYMENT">BLOCK_DEPLOYMENT</option>
           <option value="REVIEW_REQUIRED">REVIEW_REQUIRED</option>
         </select>
+
+        {/* Demo/dev sample visibility toggle — hidden by default so failed
+            development/demo missions don't clutter real mission history. */}
+        <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showDemoSamples}
+            onChange={(e) => {
+              setShowDemoSamples(e.target.checked);
+              setPage(0);
+            }}
+          />
+          Show demo/dev samples
+        </label>
       </div>
 
       {/* Missions Table */}
@@ -284,7 +298,7 @@ export default function MissionsHistoryPage() {
                       <span className="rounded bg-sky-950 px-1.5 py-0.5 text-[10px] text-sky-300 font-mono border border-sky-800">
                         {m.mode}
                       </span>
-                      <span>{m.source_a || 'no source A'} {m.source_b ? `↔ ${m.source_b}` : m.runtime_connector_name ? `↔ ${m.runtime_connector_name}` : ''}</span>
+                      <span>{m.source_a || 'no source A'} {m.source_b ? `↔ ${m.source_b}` : ''}</span>
                     </div>
                     {rowError && (
                       <div className="mt-1 rounded border border-rose-800 bg-rose-950/50 px-2 py-1 text-[10px] text-rose-300 font-mono">

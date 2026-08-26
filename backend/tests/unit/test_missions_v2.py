@@ -1,6 +1,3 @@
-from decimal import Decimal
-
-from app.adapters.runtime_connector import BlackBoxRatingApiAdapter
 from app.agents.supervisor import AssuranceSupervisor
 from app.api.assurance import resolve_demo_package
 from app.models.mission import (
@@ -8,9 +5,6 @@ from app.models.mission import (
     ComparisonMode,
     MissionObjective,
     PricingSourceRef,
-)
-from app.models.mission import (
-    RuntimeConnectorConfig as ConfigModel,
 )
 from app.services.remediation_service import RemediationService
 from app.services.validation_service import MissionValidationService
@@ -30,45 +24,6 @@ def test_mission_validation_rules():
 
     issues = MissionValidationService.validate_mission(mission)
     assert len(issues) == 0
-
-
-def test_rating_api_connector_validation():
-    # Invalid URL & missing connector name
-    bad_config = ConfigModel(
-        connector_name="",
-        base_url="not_a_url",
-        expected_premium_field="premium",
-    )
-    issues = MissionValidationService.validate_runtime_connector(bad_config)
-    assert len(issues) >= 2
-
-
-def test_blackbox_rating_adapter_payload_mapping():
-    config = ConfigModel(
-        connector_name="Test API",
-        base_url="http://localhost:8000/quote",
-        request_template={"product": "AZ_HO3"},
-        expected_premium_field="premium",
-    )
-    adapter = BlackBoxRatingApiAdapter(config)
-    payload = adapter.map_inputs_to_payload({"dwelling_limit": Decimal("350000"), "roof_age": 10})
-
-    assert payload["product"] == "AZ_HO3"
-    assert payload["dwelling_limit"] == 350000.0
-    assert payload["roof_age"] == 10
-
-
-def test_blackbox_rating_adapter_premium_extraction():
-    config = ConfigModel(
-        connector_name="Test API",
-        base_url="http://localhost:8000/quote",
-        expected_premium_field="data.quote.final_premium",
-    )
-    adapter = BlackBoxRatingApiAdapter(config)
-    res_data = {"data": {"quote": {"final_premium": "$1,250.50"}}}
-    prem = adapter.extract_premium(res_data)
-
-    assert prem == Decimal("1250.50")
 
 
 def test_supervisor_clean_equivalence():

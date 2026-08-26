@@ -10,7 +10,6 @@ from typing import Any
 
 from app.adapters.extractor_registry import EXTRACTOR_REGISTRY, excel_layout_recognized
 from app.adapters.models import AdapterResult, SourceDescriptor, SourceFormat
-from app.adapters.runtime_connector import BlackBoxRatingApiAdapter
 from app.agents.config import get_agent_config
 from app.agents.decision_schemas import (
     MAX_ADDITIONAL_PROBE_TESTS,
@@ -27,9 +26,7 @@ from app.agents.decision_schemas import (
 )
 from app.agents.gemini_client import GeminiDecisionClient, GeminiInvocationEvidence
 from app.engines.diff import SemanticDiffEngine
-from app.engines.diff.models import SemanticDiffResult
-from app.engines.impact import ImpactAnalysis, PricingImpactEngine
-from app.engines.impact.predicates import derive_predicates_from_package
+from app.engines.impact import PricingImpactEngine
 from app.engines.oracle.calculator import PremiumOracleCalculator
 from app.engines.portfolio import PortfolioExposureAnalyzer
 from app.engines.reconciliation import PricingReconciliationEngine
@@ -610,7 +607,7 @@ class AssuranceSupervisor:
             prioritized_diff_ids = []
             result.semantic_analysis = SectionResult(
                 status=AnalysisStatus.NOT_RUN,
-                reason="Semantic comparison skipped for Black-Box Runtime Verification mode.",
+                reason="Semantic comparison skipped: no comparison target available.",
             )
 
         # -------------------------------------------------------------
@@ -661,7 +658,7 @@ class AssuranceSupervisor:
                     total_executed=len(test_cases),
                     match_count=len(test_cases),
                     mismatch_count=0,
-                    reduction_pct=100.0,
+                    reduction_pct=test_plan.coverage_metrics.get("candidate_reduction_pct", 0.0),
                     experiments=experiments_list,
                 ),
             )
@@ -727,31 +724,11 @@ class AssuranceSupervisor:
                 latency_ms=imp_latency,
             )
             agent_actions.append(action_imp)
-        elif mission.mode == ComparisonMode.RUNTIME_VERIFICATION and mission.runtime_connector:
-            # No Source B / diff to key off of: boundary conditions worth
-            # probing against the black-box endpoint are derived directly
-            # from Source A's own rate table range dimensions instead.
-            self_predicates = derive_predicates_from_package(left_pkg)
-            raw_diff_result = SemanticDiffResult(
-                left_package_id=left_pkg.id,
-                right_package_id=left_pkg.id,
-                left_version=left_pkg.version,
-                right_version=left_pkg.version,
-                differences=[],
-            )
-            raw_impact = ImpactAnalysis(
-                package_id=left_pkg.id,
-                candidate_risk_predicates=self_predicates,
-            )
-            result.impact_analysis = SectionResult(
-                status=AnalysisStatus.NOT_RUN,
-                reason="Dependency impact graph traversal skipped for Black-Box Runtime Verification.",
-            )
         else:
             raw_impact = None
             result.impact_analysis = SectionResult(
                 status=AnalysisStatus.NOT_RUN,
-                reason="Dependency impact graph traversal skipped for Black-Box Runtime Verification.",
+                reason="Dependency impact graph traversal skipped: no comparison target available.",
             )
 
         if self._is_cancelled(mission.mission_id, cancellation_check):
@@ -820,7 +797,6 @@ class AssuranceSupervisor:
 
         oracle = PremiumOracleCalculator(left_pkg)
         target_calc = PremiumOracleCalculator(right_pkg) if right_pkg else None
-        runtime_adapter = BlackBoxRatingApiAdapter(mission.runtime_connector) if mission.runtime_connector else None
 
         def _run_probe(tc: PricingTestScenario) -> tuple[Decimal, Decimal]:
             """Executes exactly one deterministic premium-oracle-vs-target probe.
@@ -829,11 +805,6 @@ class AssuranceSupervisor:
             exp_prem = oracle.calculate_policy_premium(tc.risk_values).final_premium
             if target_calc:
                 act_prem = target_calc.calculate_policy_premium(tc.risk_values).final_premium
-            elif runtime_adapter:
-                try:
-                    act_prem = runtime_adapter.execute_quote(tc.risk_values)
-                except Exception:
-                    act_prem = Decimal("0.00")
             else:
                 act_prem = Decimal("0.00")
             return exp_prem, act_prem
@@ -958,7 +929,7 @@ class AssuranceSupervisor:
                 total_executed=len(selected_tests),
                 match_count=match_count,
                 mismatch_count=mismatch_count,
-                reduction_pct=getattr(test_plan, "candidate_reduction_pct", 80.0),
+                reduction_pct=test_plan.coverage_metrics.get("candidate_reduction_pct", 0.0),
                 experiments=experiments_list,
             ),
         )
@@ -1000,22 +971,6 @@ class AssuranceSupervisor:
                     mismatch_count=recon_res.mismatch_count,
                     first_divergent_node=first_div,
                     root_cause=rc_finding,
-                ),
-            )
-        elif runtime_adapter and mismatch_count > 0:
-            result.reconciliation = SectionResult(
-                status=AnalysisStatus.SUCCEEDED,
-                data=ReconciliationData(
-                    mismatch_count=mismatch_count,
-                    first_divergent_node="runtime_rating_quote",
-                    root_cause=RootCauseFinding(
-                        node_id="runtime_rating_quote",
-                        title="Black-Box Rating API Divergence",
-                        explanation="External rating API endpoint returned a premium mismatch compared to canonical filing intent.",
-                        expected_value=experiments_list[0].expected_premium,
-                        actual_value=experiments_list[0].actual_premium,
-                        divergence_type="RUNTIME_API_DISCREPANCY",
-                    ),
                 ),
             )
         else:

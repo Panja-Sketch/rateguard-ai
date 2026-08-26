@@ -6,11 +6,12 @@ import Link from 'next/link';
 import {
   getAssuranceMission,
   getAssuranceRunEvents,
+  getAssuranceRunEvidence,
   cancelAssuranceMission,
   retryAssuranceMission,
   ApiError,
 } from '@/lib/api/client';
-import { AssuranceMissionDetail, AssuranceResultV2, WorkflowEvent } from '@/lib/types/assurance';
+import { AssuranceMissionDetail, AssuranceResultV2, EvidenceRecord, WorkflowEvent } from '@/lib/types/assurance';
 import { MissionErrorBoundary } from '@/components/assurance/MissionErrorBoundary';
 import { SemanticDiffViewer } from '@/components/assurance/SemanticDiffViewer';
 import { ImpactGraph } from '@/components/assurance/ImpactGraph';
@@ -58,6 +59,7 @@ export default function MissionDetailPage() {
 
   const [missionData, setMissionData] = useState<AssuranceMissionDetail | null>(null);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [consecutiveErrors, setConsecutiveErrors] = useState(0);
@@ -90,6 +92,12 @@ export default function MissionDetailPage() {
             setEvents(eventsRes.events || []);
           } catch {
             // Non-fatal: stage display falls back to "not started" for all stages.
+          }
+          try {
+            const evidenceRes = await getAssuranceRunEvidence(missionId);
+            setEvidence(evidenceRes.evidence || []);
+          } catch {
+            // Non-fatal: the Evidence Lineage tab falls back to its empty state.
           }
           return;
         } catch (err) {
@@ -449,7 +457,9 @@ export default function MissionDetailPage() {
                   : 'text-slate-400 font-bold'
               }
             >
-              Model Status: {result?.ai_runtime?.model_status || 'Unknown'}
+              {result?.ai_runtime?.model_status === 'NOT_INVOKED_DETERMINISTIC_PIPELINE'
+                ? 'Gemini not invoked by design — zero diffs were found deterministically, so no decision required AI judgment.'
+                : `Model Status: ${result?.ai_runtime?.model_status || 'Unknown'}`}
             </span>
           </div>
           <span className="font-mono text-[11px] text-slate-400">Strict Deterministic Boundary Enforced</span>
@@ -502,32 +512,35 @@ export default function MissionDetailPage() {
 
                 <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 space-y-1">
                   <div className="text-xs text-slate-400">Target Product & State</div>
-                  <div className="text-lg font-extrabold text-sky-300 font-mono">AZ_HO3 (Arizona)</div>
+                  <div className="text-lg font-extrabold text-sky-300 font-mono">
+                    {meta.mission_object?.objective?.product || 'Unknown'}
+                    {meta.mission_object?.objective?.jurisdiction ? ` (${meta.mission_object.objective.jurisdiction})` : ''}
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 space-y-1">
                   <div className="text-xs text-slate-400">Effective Period</div>
-                  <div className="text-lg font-extrabold text-emerald-400 font-mono">2026-09-01</div>
+                  <div className="text-lg font-extrabold text-emerald-400 font-mono">
+                    {meta.mission_object?.objective?.effective_period_start || 'Unknown'}
+                  </div>
                 </div>
               </div>
 
               {/* Source Overview Card */}
               <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-3">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Source & Runtime Config</h3>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Source Overview</h3>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
                   <div className="rounded-lg border border-sky-800/80 bg-slate-950 p-3 space-y-1">
-                    <div className="text-sky-400 font-bold font-sans">Source A (Pricing Intent):</div>
+                    <div className="text-sky-400 font-bold font-sans">
+                      {meta.mode === 'EQUIVALENCE' ? 'Source A:' : 'Source A (Pricing Intent):'}
+                    </div>
                     <div className="text-slate-200">{meta.source_a || 'Not set'}</div>
                   </div>
                   <div className="rounded-lg border border-purple-800/80 bg-slate-950 p-3 space-y-1">
-                    <div className="text-purple-400 font-bold font-sans">Source B / Target Runtime:</div>
-                    <div className="text-slate-200">
-                      {meta.source_b
-                        ? meta.source_b
-                        : meta.mission_object?.runtime_connector?.connector_name
-                        ? `Runtime connector: ${meta.mission_object.runtime_connector.connector_name}`
-                        : 'None (no target selected)'}
+                    <div className="text-purple-400 font-bold font-sans">
+                      {meta.mode === 'EQUIVALENCE' ? 'Source B:' : 'Source B (Target Rating Implementation):'}
                     </div>
+                    <div className="text-slate-200">{meta.source_b || 'None (no target selected)'}</div>
                   </div>
                 </div>
               </div>
@@ -656,7 +669,7 @@ export default function MissionDetailPage() {
 
           {/* Tab 8: Evidence Lineage */}
           {activeTab === 'evidence' && (
-            <EvidenceLineage evidence={result?.evidence_refs as any} isCompleted={true} />
+            <EvidenceLineage evidence={evidence} isCompleted={true} />
           )}
 
           {/* Tab 9: Agent Action Timeline */}

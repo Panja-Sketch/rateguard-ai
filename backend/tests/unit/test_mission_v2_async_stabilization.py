@@ -241,11 +241,10 @@ def test_invalid_mission_creation_returns_422_without_enqueuing():
     code, message per issue) and are never enqueued. source_a is intentionally
     omitted here too: with hidden demo defaults removed, that alone must be rejected."""
     payload = {
-        "name": "Invalid Runtime Mission",
-        "mode": "RUNTIME_VERIFICATION",
+        "name": "Invalid Mission",
+        "mode": "RELEASE_CONFORMANCE",
         "product": "AZ_HO3",
         "jurisdiction": "Arizona",
-        "runtime_connector": None,
     }
 
     res = client.post("/api/v1/missions", json=payload)

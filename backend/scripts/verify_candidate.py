@@ -442,10 +442,9 @@ def check_completed_mission_not_deletable_but_archivable(report: Report, api_url
 def check_invalid_mission_returns_structured_422(report: Report, api_url: str) -> None:
     payload = {
         "name": "Invalid Candidate Mission",
-        "mode": "RUNTIME_VERIFICATION",
+        "mode": "RELEASE_CONFORMANCE",
         "product": "AZ_HO3",
         "jurisdiction": "Arizona",
-        "runtime_connector": None,
     }
     status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
     detail = body.get("detail", {})
@@ -467,22 +466,6 @@ def check_missing_sources_no_arizona_fallback(report: Report, api_url: str) -> N
     report.add(
         "missing_sources_no_az_ho3_fallback", ok,
         f"HTTP {status_code} (must reject rather than silently defaulting to the AZ_HO3 demo packages), body={body}",
-    )
-
-
-def check_runtime_verification_no_localhost_fallback(report: Report, api_url: str) -> None:
-    payload = {
-        "name": "Runtime Verification No Connector",
-        "mode": "RUNTIME_VERIFICATION",
-        "product": "AZ_HO3",
-        "jurisdiction": "Arizona",
-        "source_a": {"source_id": DEMO_SOURCE_A, "source_type": "SAMPLE_RELEASE", "name": "Intent"},
-    }
-    status_code, body = _http("POST", f"{api_url}/api/v1/missions", payload)
-    ok = status_code == 422
-    report.add(
-        "runtime_verification_no_localhost_fallback", ok,
-        f"HTTP {status_code} (must reject rather than silently defaulting runtime_connector to localhost), body={body}",
     )
 
 
@@ -536,7 +519,6 @@ def main(argv: list[str] | None = None) -> int:
     check_cancel_delete_lifecycle(report, args.api_url)
     check_invalid_mission_returns_structured_422(report, args.api_url)
     check_missing_sources_no_arizona_fallback(report, args.api_url)
-    check_runtime_verification_no_localhost_fallback(report, args.api_url)
 
     failed = [c for c in report.checks if not c.passed]
     print(f"\n{len(report.checks) - len(failed)}/{len(report.checks)} passed, {len(failed)} failed.")

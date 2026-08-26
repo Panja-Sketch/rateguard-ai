@@ -121,26 +121,7 @@ def run_smoke_tests(base_url: str) -> bool:
         print(f"  [✗] /api/v1/system/info failed: {e}")
         success = False
 
-    # 3. Test Connector Liveness
-    try:
-        connector_payload = {
-            "connector_name": "Synthetic Demo Connector",
-            "base_url": f"{base_url}/api/v1/demo-rating/quote",
-            "http_method": "POST",
-            "expected_premium_field": "premium",
-            "timeout_seconds": 10.0,
-        }
-        r = httpx.post(f"{base_url}/api/v1/connectors/test", json=connector_payload, timeout=10.0)
-        if r.status_code == 200:
-            print("  [✓] /api/v1/connectors/test returned 200 OK")
-        else:
-            print(f"  [✗] /api/v1/connectors/test returned {r.status_code}: {r.text[:150]}")
-            success = False
-    except Exception as e:
-        print(f"  [✗] Connector test failed: {e}")
-        success = False
-
-    # 4. List Missions
+    # 3. List Missions
     try:
         r = httpx.get(f"{base_url}/api/v1/missions?limit=5", timeout=10.0)
         if r.status_code == 200:
@@ -220,38 +201,45 @@ def run_full_tests(base_url: str, timeout_seconds: float = 300.0, poll_interval:
         print(f"  [✗] Defective mission failed: {e}")
         success = False
 
-    # Flow C: Runtime Verification Mission
+    # Flow C: Symmetric Equivalence Mission (A->B and B->A must agree)
     try:
-        runtime_req = {
-            "name": "Acceptance Test Runtime Verification Mission",
-            "mode": "RUNTIME_VERIFICATION",
+        equiv_req_ab = {
+            "name": "Acceptance Test Equivalence Mission (A to B)",
+            "mode": "EQUIVALENCE",
             "product": "AZ_HO3",
             "jurisdiction": "Arizona",
-            "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Intent"},
-            "runtime_connector": {
-                "connector_name": "Synthetic Demo Rating API",
-                "base_url": f"{base_url}/api/v1/demo-rating/quote",
-                "http_method": "POST",
-                "expected_premium_field": "premium",
-                "timeout_seconds": 10.0,
-            },
+            "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Source A"},
+            "source_b": {"source_id": "AZ_HO3_2026_09_CLEAN", "source_type": "SAMPLE_RELEASE", "name": "Source B"},
             "disposable_sample_run": True,
         }
-        r = httpx.post(f"{base_url}/api/v1/missions", json=runtime_req, timeout=10.0)
-        if r.status_code in (200, 202):
-            m_id = r.json()["mission_id"]
-            print(f"  [✓] Runtime Verification mission accepted HTTP 202 (Mission ID: {m_id}). Polling completion...")
-            res = poll_mission_until_terminal(base_url, m_id, timeout_seconds, poll_interval)
-            status_val = res.get("status")
-            print(f"  [✓] Runtime Verification mission finished with status '{status_val}'")
-            if status_val not in ("COMPLETED", "NEEDS_REVIEW"):
-                print(f"  [✗] Expected COMPLETED or NEEDS_REVIEW, got {status_val}")
+        equiv_req_ba = {
+            **equiv_req_ab,
+            "name": "Acceptance Test Equivalence Mission (B to A)",
+            "source_a": equiv_req_ab["source_b"],
+            "source_b": equiv_req_ab["source_a"],
+        }
+        decisions: dict[str, str | None] = {}
+        for label, req in (("A->B", equiv_req_ab), ("B->A", equiv_req_ba)):
+            r = httpx.post(f"{base_url}/api/v1/missions", json=req, timeout=10.0)
+            if r.status_code not in (200, 202):
+                print(f"  [✗] Equivalence {label} submission returned HTTP {r.status_code}: {r.text[:150]}")
                 success = False
-        else:
-            print(f"  [✗] Runtime Verification submission returned HTTP {r.status_code}: {r.text[:150]}")
+                continue
+            m_id = r.json()["mission_id"]
+            print(f"  [✓] Equivalence {label} mission accepted HTTP 202 (Mission ID: {m_id}). Polling completion...")
+            res = poll_mission_until_terminal(base_url, m_id, timeout_seconds, poll_interval)
+            decisions[label] = res.get("decision")
+            status_val = res.get("status")
+            print(f"  [✓] Equivalence {label} mission finished with status '{status_val}', decision '{decisions[label]}'")
+            if decisions[label] != "PASS" and status_val != "COMPLETED":
+                print(f"  [✗] Expected PASS/COMPLETED, got {decisions[label]}/{status_val}")
+                success = False
+
+        if decisions.get("A->B") and decisions.get("B->A") and decisions["A->B"] != decisions["B->A"]:
+            print(f"  [✗] Equivalence not symmetric: A->B={decisions['A->B']} but B->A={decisions['B->A']}")
             success = False
     except Exception as e:
-        print(f"  [✗] Runtime Verification mission failed: {e}")
+        print(f"  [✗] Equivalence mission failed: {e}")
         success = False
 
     return success

@@ -47,6 +47,7 @@ dist/
 .env
 .env.*
 *.deploy-env.yaml
+infrastructure/.candidate-env.yaml
 !.env.example
 !**/.env.example
 

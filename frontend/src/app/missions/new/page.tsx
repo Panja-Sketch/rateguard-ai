@@ -2,32 +2,21 @@
 
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiError, createAssuranceMission, describeFetchError, testRatingApiConnector } from '@/lib/api/client';
-import { ComparisonMode, RuntimeConnectorConfig, ValidationIssue } from '@/lib/types/assurance';
+import { ApiError, createAssuranceMission, describeFetchError } from '@/lib/api/client';
+import { ComparisonMode, ValidationIssue } from '@/lib/types/assurance';
 import {
   Play,
-  CheckCircle2,
-  AlertCircle,
   Cpu,
-  FileCode2,
-  Server,
-  Zap,
-  Lock,
   Layers,
   ArrowRight,
   ShieldCheck,
-  Globe,
-  Sliders,
   Sparkles,
 } from 'lucide-react';
-
-const DEMO_RATING_ENDPOINT_URL = 'http://localhost:8000/api/v1/demo-rating/quote';
 
 export default function NewMissionPage() {
   const router = useRouter();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [loading, setLoading] = useState(false);
-  const [testingConn, setTestingConn] = useState(false);
 
   const [mode, setMode] = useState<ComparisonMode>('RELEASE_CONFORMANCE');
   const [name, setName] = useState('Arizona HO3 Pricing Release Conformance');
@@ -46,44 +35,21 @@ export default function NewMissionPage() {
 
   const [sampleTargetType, setSampleTargetType] = useState<'DEFECTIVE' | 'CLEAN'>('DEFECTIVE');
 
-  // Rating API Connector State — no hidden default: the field starts empty and is
-  // only ever pre-filled when the user explicitly opts into the demo endpoint below.
-  const [connectorName, setConnectorName] = useState('');
-  const [connectorUrl, setConnectorUrl] = useState('');
-  const [connectorMethod, setConnectorMethod] = useState('POST');
-  const [connectorAuthType, setConnectorAuthType] = useState<'none' | 'api_key' | 'bearer'>('none');
-  const [connectorPremiumField, setConnectorPremiumField] = useState('premium');
-  const [connectorTestResult, setConnectorTestResult] = useState<{ status: string; premium?: string } | null>(null);
-  const [useDemoRatingEndpoint, setUseDemoRatingEndpoint] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
   const [fieldIssues, setFieldIssues] = useState<ValidationIssue[]>([]);
 
-  const handleToggleDemoEndpoint = (checked: boolean) => {
-    setUseDemoRatingEndpoint(checked);
-    if (checked) {
-      setConnectorName('Built-in Demo Rating Endpoint');
-      setConnectorUrl(DEMO_RATING_ENDPOINT_URL);
-    } else if (connectorUrl === DEMO_RATING_ENDPOINT_URL) {
-      setConnectorName('');
-      setConnectorUrl('');
-    }
-  };
+  // Neutral "Source A" / "Source B" labels for a symmetric Equivalence
+  // comparison (neither source is authoritative); Release Conformance keeps
+  // the intent-vs-target framing since one side genuinely is authoritative.
+  const isEquivalence = mode === 'EQUIVALENCE';
+  const sourceALabel = isEquivalence ? 'Source A' : 'Source A (Pricing Intent)';
+  const sourceBLabel = isEquivalence ? 'Source B' : 'Source B (Target Rating Implementation)';
 
   // Field Level Validation Rules
   const validateCurrentStep = () => {
     if (step === 1) return true;
     if (step === 2) {
-      if (mode === 'RUNTIME_VERIFICATION') {
-        if (!connectorName.trim() || !connectorUrl.trim() || !connectorPremiumField.trim()) return false;
-        if (!connectorUrl.startsWith('http://') && !connectorUrl.startsWith('https://')) return false;
-        if (!connectorUrl.includes('localhost') && !connectorUrl.startsWith('https://')) return false;
-      } else if (mode === 'RELEASE_CONFORMANCE') {
-        if (!sourceAId || !sourceBId) return false;
-      } else if (mode === 'EQUIVALENCE') {
-        if (!sourceAId || !sourceBId) return false;
-      }
-      return true;
+      return !!(sourceAId && sourceBId);
     }
     if (step === 3) {
       return !!(name.trim() && product.trim() && jurisdiction.trim() && effectivePeriodStart.trim());
@@ -91,33 +57,10 @@ export default function NewMissionPage() {
     return true;
   };
 
-  const handleTestConnector = async () => {
-    setTestingConn(true);
-    setConnectorTestResult(null);
-    setError(null);
-    try {
-      const config: RuntimeConnectorConfig = {
-        connector_name: connectorName,
-        base_url: connectorUrl,
-        http_method: connectorMethod,
-        auth_type: connectorAuthType,
-        expected_premium_field: connectorPremiumField,
-        timeout_seconds: 10.0,
-      };
-      const res = await testRatingApiConnector(config as unknown as Record<string, unknown>);
-      setConnectorTestResult({ status: 'SUCCESS', premium: res.parsed_premium });
-    } catch (err: unknown) {
-      setError(`Connector Test Failed: ${describeFetchError(err, 'No connection was made.')}`);
-    } finally {
-      setTestingConn(false);
-    }
-  };
-
-  // This wizard only ever offers bundled sample sources for RELEASE_CONFORMANCE /
-  // EQUIVALENCE (there is no real upload picker here — that lives on /sources), so
-  // those modes are always explicitly marked as a demo sample. Runtime Verification
-  // is a demo sample only when the user explicitly checked "use demo endpoint" below.
-  const isDemoSampleMission = mode !== 'RUNTIME_VERIFICATION' || useDemoRatingEndpoint;
+  // This wizard only ever offers bundled sample sources (there is no real
+  // upload picker here — that lives on /sources), so every mission created
+  // through it is always explicitly marked as a demo sample.
+  const isDemoSampleMission = true;
 
   // Guards against a double submission racing ahead of React's re-render of
   // the button's `disabled={loading}` prop (e.g. a fast double-click before
@@ -132,26 +75,11 @@ export default function NewMissionPage() {
     setError(null);
     setFieldIssues([]);
     try {
-      const sourceB =
-        mode === 'RUNTIME_VERIFICATION'
-          ? null
-          : {
-              source_id: sampleTargetType === 'CLEAN' ? 'AZ_HO3_2026_09_CLEAN' : sourceBId,
-              source_type: 'SAMPLE_RELEASE',
-              name: sampleTargetType === 'CLEAN' ? 'Clean Compliant Target' : sourceBName,
-            };
-
-      const connectorConfig =
-        mode === 'RUNTIME_VERIFICATION'
-          ? {
-              connector_name: connectorName,
-              base_url: connectorUrl,
-              http_method: connectorMethod,
-              auth_type: connectorAuthType,
-              expected_premium_field: connectorPremiumField,
-              timeout_seconds: 10.0,
-            }
-          : null;
+      const sourceB = {
+        source_id: sampleTargetType === 'CLEAN' ? 'AZ_HO3_2026_09_CLEAN' : sourceBId,
+        source_type: 'SAMPLE_RELEASE',
+        name: sampleTargetType === 'CLEAN' ? 'Clean Compliant Target' : sourceBName,
+      };
 
       const payload = {
         name,
@@ -167,7 +95,6 @@ export default function NewMissionPage() {
           name: sourceAName,
         },
         source_b: sourceB,
-        runtime_connector: connectorConfig,
         disposable_sample_run: true,
         is_demo_sample: isDemoSampleMission,
       };
@@ -200,7 +127,7 @@ export default function NewMissionPage() {
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white">Start Assurance Mission</h1>
         <p className="text-xs sm:text-sm text-slate-400 mt-1">
-          Configure an autonomous pricing release assurance mission with symmetric equivalence, release conformance, or black-box rating API verification.
+          Configure an autonomous pricing release assurance mission with symmetric equivalence or release conformance.
         </p>
       </div>
 
@@ -266,7 +193,7 @@ export default function NewMissionPage() {
         <div className="space-y-4">
           <h2 className="text-base font-bold text-white">Select Assurance Mission Comparison Mode</h2>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {/* Mode 1: Release Conformance */}
             <div
               onClick={() => {
@@ -291,31 +218,7 @@ export default function NewMissionPage() {
               </p>
             </div>
 
-            {/* Mode 2: Runtime Verification */}
-            <div
-              onClick={() => {
-                setMode('RUNTIME_VERIFICATION');
-                setName('External Black-Box Rating API Verification');
-              }}
-              className={`cursor-pointer rounded-2xl border p-5 space-y-3 transition-all ${
-                mode === 'RUNTIME_VERIFICATION'
-                  ? 'border-purple-500 bg-purple-950/40 shadow-xl shadow-purple-950/50'
-                  : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-purple-950 px-2 py-0.5 text-[10px] font-bold text-purple-300 border border-purple-800">
-                  External Microservice
-                </span>
-                <Globe className="h-5 w-5 text-purple-400" />
-              </div>
-              <h3 className="text-sm font-bold text-white">Runtime Verification</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Validates an external vendor-neutral rating API microservice by probing quotes via HTTP without inspecting target internals.
-              </p>
-            </div>
-
-            {/* Mode 3: Equivalence */}
+            {/* Mode 2: Equivalence */}
             <div
               onClick={() => {
                 setMode('EQUIVALENCE');
@@ -335,7 +238,7 @@ export default function NewMissionPage() {
               </div>
               <h3 className="text-sm font-bold text-white">Equivalence Mode</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Compares Source A and Source B symmetrically to verify full AST behavioral equivalence (neither source assumed authoritative).
+                Compares Source A and Source B symmetrically to verify full AST behavioral equivalence in both directions (A vs B and B vs A) — neither source is assumed authoritative.
               </p>
             </div>
           </div>
@@ -351,181 +254,70 @@ export default function NewMissionPage() {
         </div>
       )}
 
-      {/* STEP 2: Configure Sources & Rating API Connector */}
+      {/* STEP 2: Configure Sources */}
       {step === 2 && (
         <div className="space-y-6">
-          <h2 className="text-base font-bold text-white">Configure Pricing Sources & Target Runtime</h2>
+          <h2 className="text-base font-bold text-white">Configure Pricing Sources</h2>
 
-          {mode === 'RUNTIME_VERIFICATION' ? (
-            /* Black-Box Rating API Connector Form */
-            <div className="rounded-2xl border border-purple-800/80 bg-slate-900/90 p-6 space-y-5 shadow-2xl">
-              <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-purple-300 flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-purple-400" /> Vendor-Neutral Black-Box Rating API Connector
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Connect any HTTP/HTTPS rating API endpoint (e.g. Guidewire, Duck Creek, Earnix, or proprietary microservice).
-                  </p>
-                </div>
-                <span className="text-[10px] font-mono bg-purple-950 text-purple-300 border border-purple-800 px-2 py-0.5 rounded">
-                  HTTP / REST Connector
-                </span>
-              </div>
-
-              <label className="flex items-start gap-2.5 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs text-amber-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useDemoRatingEndpoint}
-                  onChange={(e) => handleToggleDemoEndpoint(e.target.checked)}
-                  className="mt-0.5"
-                />
-                <span>
-                  <span className="font-bold flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5" /> Use demo sample endpoint
-                  </span>
-                  <span className="block text-amber-200/80 mt-0.5">
-                    Points at RateGuard&apos;s bundled synthetic rating microservice instead of a real connector.
-                    Never selected automatically — leave unchecked to enter your own endpoint below.
-                  </span>
-                </span>
-              </label>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-300">Connector Name *</label>
-                  <input
-                    type="text"
-                    value={connectorName}
-                    onChange={(e) => setConnectorName(e.target.value)}
-                    className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white focus:border-purple-500 focus:outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-300">Rating API Base URL *</label>
-                  <input
-                    type="text"
-                    value={connectorUrl}
-                    onChange={(e) => {
-                      setConnectorUrl(e.target.value);
-                      if (useDemoRatingEndpoint && e.target.value !== DEMO_RATING_ENDPOINT_URL) {
-                        setUseDemoRatingEndpoint(false);
-                      }
-                    }}
-                    placeholder="https://your-rating-api.example.com/quote"
-                    className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white focus:border-purple-500 focus:outline-none"
-                  />
-                  <p className="text-[10px] text-slate-500">HTTPS is strictly required outside localhost. Left empty by default — no hidden default endpoint is submitted.</p>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-300">Authentication Type</label>
-                  <select
-                    value={connectorAuthType}
-                    onChange={(e) => setConnectorAuthType(e.target.value as any)}
-                    className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white focus:border-purple-500 focus:outline-none"
-                  >
-                    <option value="none">None / Public API</option>
-                    <option value="api_key">API Key Header</option>
-                    <option value="bearer">Bearer Token</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-300">Expected Premium Response Field *</label>
-                  <input
-                    type="text"
-                    value={connectorPremiumField}
-                    onChange={(e) => setConnectorPremiumField(e.target.value)}
-                    placeholder="premium"
-                    className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white focus:border-purple-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Test Connection Button */}
-              <div className="pt-2 flex items-center justify-between border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={handleTestConnector}
-                  disabled={testingConn || !connectorUrl.trim()}
-                  className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500 transition-all disabled:opacity-50"
-                >
-                  <Zap className={`h-3.5 w-3.5 ${testingConn ? 'animate-spin' : ''}`} />
-                  {testingConn ? 'Testing Endpoint...' : 'Test Connection'}
-                </button>
-
-                {connectorTestResult && (
-                  <div className="flex items-center gap-2 text-xs font-mono text-emerald-400">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>Test Connection Succeeded! Parsed Premium: <strong className="text-white">${connectorTestResult.premium}</strong></span>
-                  </div>
-                )}
-              </div>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                <strong className="font-bold">Demo sample.</strong> This wizard only offers RateGuard&apos;s bundled
+                Arizona HO3 sample sources. To compare your own uploaded filings or engine configs, use the{' '}
+                <a href="/sources" className="underline hover:text-amber-100">Sources</a> page instead.
+              </span>
             </div>
-          ) : (
-            /* Release Conformance / Equivalence Source Selection */
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
-                <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                <span>
-                  <strong className="font-bold">Demo sample.</strong> This wizard only offers RateGuard&apos;s bundled
-                  Arizona HO3 sample sources. To compare your own uploaded filings or engine configs, use the{' '}
-                  <a href="/sources" className="underline hover:text-amber-100">Sources</a> page instead.
-                </span>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            {/* Source A */}
+            <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-sky-300 uppercase tracking-wider">{sourceALabel}</span>
+                <span className="text-xs text-slate-400 font-mono">AZ_HO3_2026_09</span>
               </div>
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              {/* Source A */}
-              <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-bold text-sky-300 uppercase tracking-wider">Source A (Pricing Intent)</span>
-                  <span className="text-xs text-slate-400 font-mono">AZ_HO3_2026_09</span>
-                </div>
-                <div className="text-sm font-bold text-white">Arizona HO3 Actuarial Spec</div>
-                <p className="text-xs text-slate-400">Authoritative Rate Filing Specification (2026.09)</p>
+              <div className="text-sm font-bold text-white">Arizona HO3 Actuarial Spec</div>
+              <p className="text-xs text-slate-400">Authoritative Rate Filing Specification (2026.09)</p>
+            </div>
+
+            {/* Source B Target Selection */}
+            <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-5 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-purple-300 uppercase tracking-wider">{sourceBLabel}</span>
               </div>
 
-              {/* Source B Target Selection */}
-              <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-5 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-bold text-purple-300 uppercase tracking-wider">Source B (Target Rating Implementation)</span>
-                </div>
-
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400">Select Target Implementation Variant:</label>
                 <div className="space-y-2">
-                  <label className="text-xs text-slate-400">Select Target Implementation Variant:</label>
-                  <div className="space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => setSampleTargetType('DEFECTIVE')}
-                      className={`w-full rounded-lg border p-3 text-left text-xs transition-all ${
-                        sampleTargetType === 'DEFECTIVE'
-                          ? 'border-rose-500 bg-rose-950/30 text-rose-200 font-bold'
-                          : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      <div className="font-bold text-white">Target Implementation (Sample Release)</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">Loads target engine implementation release candidate.</div>
-                    </button>
+                  <button
+                    type="button"
+                    onClick={() => setSampleTargetType('DEFECTIVE')}
+                    className={`w-full rounded-lg border p-3 text-left text-xs transition-all ${
+                      sampleTargetType === 'DEFECTIVE'
+                        ? 'border-rose-500 bg-rose-950/30 text-rose-200 font-bold'
+                        : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    <div className="font-bold text-white">Target Implementation (Sample Release)</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">Loads target engine implementation release candidate.</div>
+                  </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setSampleTargetType('CLEAN')}
-                      className={`w-full rounded-lg border p-3 text-left text-xs transition-all ${
-                        sampleTargetType === 'CLEAN'
-                          ? 'border-emerald-500 bg-emerald-950/30 text-emerald-200 font-bold'
-                          : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      <div className="font-bold text-white">Clean Control Release</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">Loads clean, compliant target engine release.</div>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSampleTargetType('CLEAN')}
+                    className={`w-full rounded-lg border p-3 text-left text-xs transition-all ${
+                      sampleTargetType === 'CLEAN'
+                        ? 'border-emerald-500 bg-emerald-950/30 text-emerald-200 font-bold'
+                        : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    <div className="font-bold text-white">Clean Control Release</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">Loads clean, compliant target engine release.</div>
+                  </button>
                 </div>
               </div>
-              </div>
             </div>
-          )}
+            </div>
+          </div>
 
           <div className="pt-4 flex justify-between">
             <button
@@ -639,4 +431,3 @@ export default function NewMissionPage() {
     </div>
   );
 }
-

@@ -300,7 +300,6 @@ def test_main_fails_the_cors_check_when_frontend_url_is_not_provided():
          patch.object(vc, "check_system_status"), patch.object(vc, "create_demo_mission", return_value=None), \
          patch.object(vc, "check_cancel_delete_lifecycle"), patch.object(vc, "check_invalid_mission_returns_structured_422"), \
          patch.object(vc, "check_missing_sources_no_arizona_fallback"), \
-         patch.object(vc, "check_runtime_verification_no_localhost_fallback"), \
          patch.object(vc, "Report", return_value=report):
         vc.main(argv=["--yes-test-candidate", "--api-url", "https://example.com"])
     cors_checks = [c for c in report.checks if c.name == "cors_allows_candidate_web_origin"]

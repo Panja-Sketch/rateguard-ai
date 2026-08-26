@@ -60,50 +60,6 @@ def test_explicit_null_source_b_is_rejected_for_release_conformance():
     assert "source_b" in fields
 
 
-def test_runtime_verification_requires_connector_not_defaulted():
-    payload = {
-        "name": "Runtime Verification No Connector",
-        "mode": "RUNTIME_VERIFICATION",
-        "product": "AZ_HO3",
-        "jurisdiction": "Arizona",
-        "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Intent"},
-        "source_b": None,
-        "runtime_connector": None,
-    }
-    res = client.post("/api/v1/missions", json=payload)
-    assert res.status_code == 422
-    fields = {i["field"] for i in res.json()["detail"]["issues"]}
-    assert "runtime_connector" in fields
-
-
-def test_runtime_verification_with_valid_connector_preserves_null_source_b():
-    """Proves a Runtime Verification mission's source_b remains null end-to-end —
-    it must never be displayed as the bundled defective sample package."""
-    payload = {
-        "name": "Runtime Verification Valid",
-        "mode": "RUNTIME_VERIFICATION",
-        "product": "AZ_HO3",
-        "jurisdiction": "Arizona",
-        "source_a": {"source_id": "AZ_HO3_2026_09", "source_type": "SAMPLE_RELEASE", "name": "Intent"},
-        "source_b": None,
-        "runtime_connector": {
-            "connector_name": "Test Connector",
-            "base_url": "https://example.com/quote",
-            "expected_premium_field": "premium",
-        },
-    }
-    res = client.post("/api/v1/missions", json=payload)
-    assert res.status_code == 202
-    mission_id = res.json()["mission_id"]
-
-    list_res = client.get("/api/v1/missions")
-    row = next(m for m in list_res.json()["missions"] if m["mission_id"] == mission_id)
-    assert row["source_b"] is None  # never "AZ_HO3_2026_09_DEFECTIVE"
-
-    detail_res = client.get(f"/api/v1/missions/{mission_id}")
-    assert detail_res.json()["metadata"]["source_b"] is None
-
-
 def test_equivalence_mode_requires_both_sources_explicitly():
     payload = {
         "name": "Equivalence Missing B",

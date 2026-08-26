@@ -53,7 +53,8 @@ export function ReconciliationTrace({ scenario, isCompleted = true }: Reconcilia
             Pricing Node Reconciliation Trace & RCA
           </h3>
           <p className="font-mono text-xs text-sky-400 mt-0.5">
-            Scenario: {scenario.name || scenario.scenario_id} ({scenario.scenario_id})
+            Scenario: {scenario.name || scenario.probe_name || scenario.experiment_id}
+            {scenario.experiment_id ? ` (${scenario.experiment_id})` : ''}
           </p>
         </div>
         <span

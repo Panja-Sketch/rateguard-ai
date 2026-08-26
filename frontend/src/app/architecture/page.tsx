@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck, ArrowDown, Globe } from 'lucide-react';
+import { Network, Database, Bot, Cpu, Lock, Server, ShieldCheck, ArrowDown } from 'lucide-react';
 import { fetchSystemInfo } from '@/lib/api/client';
 
 const DEFAULT_MODEL_LABEL = 'Gemini 3.7 Flash';
@@ -40,13 +40,6 @@ export default function ArchitecturePage() {
       desc: 'Orchestrates adaptive assurance missions, interprets findings, plans probes, synthesizes root causes, and proposes remediation patches.',
       icon: Bot,
       color: 'border-sky-500/50 bg-sky-950/30 text-sky-300',
-    },
-    {
-      title: 'Vendor-Neutral Rating API Connector',
-      category: 'Runtime Integration',
-      desc: 'Connects external rating APIs (Guidewire, Duck Creek, Earnix, microservices) via BlackBoxRatingApiAdapter for Black-Box Runtime Verification.',
-      icon: Globe,
-      color: 'border-purple-500/50 bg-purple-950/30 text-purple-300',
     },
     {
       title: 'BigQuery (50K Portfolio)',
@@ -96,17 +89,15 @@ export default function ArchitecturePage() {
         </h2>
 
         <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs text-sky-300 overflow-x-auto space-y-2 leading-relaxed">
-          <div>User Browser / Client $\rightarrow$ Next.js 14 Frontend</div>
+          <div>User Browser / Client → Next.js 14 Frontend</div>
           <div className="pl-4 text-slate-500 font-sans">↓ HTTP REST API</div>
           <div>FastAPI Backend (Cloud Run API)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ Pub/Sub Async Queue / Native Invocation</div>
           <div>Private Worker Runtime (Cloud Run Worker)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ Agentic Assurance Supervisor</div>
-          <div className="text-purple-300 font-bold">{supervisorLabel} $\leftrightarrow$ {modelLabel} ({providerLabel})</div>
+          <div className="text-purple-300 font-bold">{supervisorLabel} ↔ {modelLabel} ({providerLabel})</div>
           <div className="pl-4 text-slate-500 font-sans">↕ Deterministic Boundaries</div>
           <div>Python Deterministic Engines (AST Diff, Oracle Math, Test Generator, Reconciliation)</div>
-          <div className="pl-4 text-slate-500 font-sans">↓ External Runtime Verification</div>
-          <div className="text-emerald-300">BlackBoxRatingApiAdapter $\rightarrow$ External Rating API (HTTP/HTTPS)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ Cloud Persistence</div>
           <div>Firestore (RunState) | BigQuery (50K Portfolio SQL) | GCS (Artifacts)</div>
           <div className="pl-4 text-slate-500 font-sans">↓ Release Decision</div>

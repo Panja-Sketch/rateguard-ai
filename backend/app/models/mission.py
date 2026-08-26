@@ -23,32 +23,6 @@ class ComparisonMode(StrEnum):
     """Assurance Mission comparison modes."""
     EQUIVALENCE = "EQUIVALENCE"
     RELEASE_CONFORMANCE = "RELEASE_CONFORMANCE"
-    RUNTIME_VERIFICATION = "RUNTIME_VERIFICATION"
-
-
-class AuthType(StrEnum):
-    """Supported rating API authentication types."""
-    NONE = "none"
-    API_KEY = "api_key"
-    BEARER = "bearer"
-
-
-class RuntimeConnectorConfig(BaseModel):
-    """Vendor-neutral rating API runtime connector configuration."""
-    connector_name: str = Field(description="Human readable connector name")
-    base_url: str = Field(description="Base target HTTP/HTTPS URL")
-    http_method: str = Field(default="POST", description="HTTP request method")
-    auth_type: AuthType = Field(default=AuthType.NONE, description="Authentication type")
-    auth_header_name: str | None = Field(default=None, description="Custom auth header name e.g. X-API-Key")
-    secret_ref: str | None = Field(default=None, description="Environment or Secret Manager key reference")
-    request_template: dict[str, Any] = Field(default_factory=dict, description="Request JSON template mapping")
-    response_mapping: dict[str, str] = Field(default_factory=dict, description="Response field path mapping")
-    timeout_seconds: float = Field(default=10.0, description="HTTP timeout seconds")
-    max_retries: int = Field(default=3, description="Maximum HTTP retries")
-    expected_premium_field: str = Field(default="premium", description="Response field containing final premium")
-    trace_field: str | None = Field(default=None, description="Optional response field containing calculation trace")
-    correlation_id: str | None = Field(default=None, description="Optional request correlation ID")
-    policy_id_field: str | None = Field(default=None, description="Optional policy ID field")
 
 
 class ValidationIssue(BaseModel):
@@ -206,7 +180,6 @@ class AssuranceMission(BaseModel):
     objective: MissionObjective
     source_a: PricingSourceRef
     source_b: PricingSourceRef | None = None
-    runtime_connector: RuntimeConnectorConfig | None = None
     disposable_sample_run: bool = False
     is_demo_sample: bool = Field(
         default=False,

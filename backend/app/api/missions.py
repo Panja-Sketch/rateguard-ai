@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
-from app.adapters.runtime_connector import BlackBoxRatingApiAdapter, RatingApiConnectionError
 from app.messaging import AssuranceJob, get_message_publisher
 from app.models.mission import (
     AssuranceMission,
@@ -14,7 +13,6 @@ from app.models.mission import (
     MissionObjective,
     MissionStatus,
     PricingSourceRef,
-    RuntimeConnectorConfig,
     ValidationIssue,
 )
 from app.services.mission_transitions import (
@@ -34,9 +32,8 @@ router = APIRouter(prefix="/api/v1", tags=["assurance-missions-v2"])
 class CreateMissionRequest(BaseModel):
     """Payload for creating and initiating an Assurance Mission V2.
 
-    Source selection is never silently defaulted: `source_a` is required, and
-    `source_b` must be explicitly provided (or explicitly omitted/null for
-    RUNTIME_VERIFICATION mode) — mode-specific requirements are enforced by
+    Source selection is never silently defaulted: `source_a` and `source_b`
+    are both required — mode-specific requirements are enforced by
     MissionValidationService.validate_mission, not by a payload default.
     """
 
@@ -54,13 +51,12 @@ class CreateMissionRequest(BaseModel):
     )
     source_b: PricingSourceRef | None = Field(
         default=None,
-        description="Target/comparison source. Required for RELEASE_CONFORMANCE and EQUIVALENCE; must be null for RUNTIME_VERIFICATION.",
+        description="Target/comparison source. Required for both RELEASE_CONFORMANCE and EQUIVALENCE.",
     )
-    runtime_connector: RuntimeConnectorConfig | None = None
     disposable_sample_run: bool = Field(default=False)
     is_demo_sample: bool = Field(
         default=False,
-        description="Set only when the user explicitly opted into a built-in demo/sample source or rating connector.",
+        description="Set only when the user explicitly opted into a built-in demo/sample source.",
     )
 
 
@@ -75,24 +71,6 @@ def _validation_error(message: str, issues: list) -> HTTPException:
     )
 
 
-@router.post("/connectors/test")
-def test_rating_api_connector(config: RuntimeConnectorConfig) -> dict[str, Any]:
-    """Validates and tests connection to an external Black-Box Rating API endpoint."""
-    issues = MissionValidationService.validate_runtime_connector(config)
-    if issues:
-        raise _validation_error("Connector validation failed.", issues)
-
-    adapter = BlackBoxRatingApiAdapter(config)
-    try:
-        res = adapter.test_connection()
-        return res
-    except RatingApiConnectionError as err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Test connection failed: {err}",
-        ) from err
-
-
 @router.post("/missions", status_code=status.HTTP_202_ACCEPTED)
 def create_assurance_mission(
     req: CreateMissionRequest,
@@ -102,9 +80,8 @@ def create_assurance_mission(
     Production mission execution NEVER runs in-process inside the API Cloud Run service.
 
     Source selection is never silently substituted with a demo/sample package: `source_a`
-    is required for every mode, and mode-specific requirements for `source_b` /
-    `runtime_connector` are enforced below by MissionValidationService — not by payload
-    defaults.
+    is required for every mode, and mode-specific requirements for `source_b` are enforced
+    below by MissionValidationService — not by payload defaults.
     """
     if req.source_a is None:
         raise _validation_error(
@@ -137,7 +114,6 @@ def create_assurance_mission(
         objective=objective,
         source_a=req.source_a,
         source_b=req.source_b,
-        runtime_connector=req.runtime_connector,
         disposable_sample_run=req.disposable_sample_run,
         is_demo_sample=req.is_demo_sample,
         created_at=datetime.now(UTC).isoformat(),
@@ -258,6 +234,7 @@ def list_assurance_missions(
     mode_filter: str | None = Query(default=None, alias="mode"),
     decision_filter: str | None = Query(default=None, alias="decision"),
     include_legacy: bool = Query(default=False),
+    include_demo_samples: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Lists Mission V2 assurance records with pagination and filtering."""
     store = get_run_store()
@@ -272,6 +249,10 @@ def list_assurance_missions(
             or meta.get("schema_version") == 2
         )
         if not include_legacy and not is_v2:
+            continue
+
+        is_demo_sample = meta.get("is_demo_sample", meta.get("disposable_sample_run", False))
+        if not include_demo_samples and is_demo_sample:
             continue
 
         status_val = r.status.value if hasattr(r.status, "value") else str(r.status)
@@ -300,15 +281,10 @@ def list_assurance_missions(
                 "workflow_stage": r.workflow_stage,
                 "attempt_number": r.attempt_number,
                 "mode": mode_val,
-                # No hidden defaults: a mission with no source_b (e.g. Runtime Verification)
-                # displays as null, never as the bundled defective sample package.
+                # No hidden defaults: a mission with no source_b displays as null, never
+                # as the bundled defective sample package.
                 "source_a": r.left_package_id or meta.get("source_a"),
                 "source_b": r.right_package_id or meta.get("source_b"),
-                "runtime_connector_name": (
-                    (meta.get("mission_object") or {}).get("runtime_connector") or {}
-                ).get("connector_name")
-                if isinstance(meta.get("mission_object"), dict)
-                else None,
                 "decision": r.decision or "UNKNOWN",
                 "summary": r.summary or "",
                 "disposable_sample_run": meta.get("disposable_sample_run", False),

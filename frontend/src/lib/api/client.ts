@@ -94,7 +94,6 @@ export async function createAssuranceMission(params: {
   gating_policy: string;
   source_a: Record<string, unknown> | null;
   source_b?: Record<string, unknown> | null;
-  runtime_connector?: Record<string, unknown> | null;
   disposable_sample_run?: boolean;
   is_demo_sample?: boolean;
 }): Promise<{
@@ -113,25 +112,10 @@ export async function createAssuranceMission(params: {
   return handleResponse(res);
 }
 
-export async function testRatingApiConnector(config: Record<string, unknown>): Promise<{
-  status: string;
-  http_status: number;
-  parsed_premium: string;
-  response_sample: Record<string, unknown>;
-}> {
-  const res = await fetch(`${BASE_URL}/api/v1/connectors/test`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
-    cache: 'no-store',
-  });
-  return handleResponse(res);
-}
-
 export async function listAssuranceMissions(
   limit: number = 50,
   offset: number = 0,
-  filters?: { status?: string; mode?: string; decision?: string }
+  filters?: { status?: string; mode?: string; decision?: string; includeDemoSamples?: boolean }
 ): Promise<{
   missions: AssuranceMissionSummary[];
   total_count: number;
@@ -142,6 +126,7 @@ export async function listAssuranceMissions(
   if (filters?.status) params.append('status', filters.status);
   if (filters?.mode) params.append('mode', filters.mode);
   if (filters?.decision) params.append('decision', filters.decision);
+  if (filters?.includeDemoSamples) params.append('include_demo_samples', 'true');
 
   const res = await fetch(`${BASE_URL}/api/v1/missions?${params.toString()}`, {
     cache: 'no-store',

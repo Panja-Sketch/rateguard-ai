@@ -10,25 +10,8 @@ export type MissionStatus =
   | 'CANCELLED'
   | 'ARCHIVED';
 
-export type ComparisonMode = 'EQUIVALENCE' | 'RELEASE_CONFORMANCE' | 'RUNTIME_VERIFICATION';
+export type ComparisonMode = 'EQUIVALENCE' | 'RELEASE_CONFORMANCE';
 export type AnalysisStatus = 'NOT_AVAILABLE' | 'NOT_RUN' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-
-export interface RuntimeConnectorConfig {
-  connector_name: string;
-  base_url: string;
-  http_method?: string;
-  auth_type?: 'none' | 'api_key' | 'bearer';
-  auth_header_name?: string;
-  secret_ref?: string;
-  request_template?: Record<string, unknown>;
-  response_mapping?: Record<string, string>;
-  timeout_seconds?: number;
-  max_retries?: number;
-  expected_premium_field: string;
-  trace_field?: string;
-  correlation_id?: string;
-  policy_id_field?: string;
-}
 
 export interface ValidationIssue {
   field: string;
@@ -286,7 +269,6 @@ export interface AssuranceMissionSummary {
   mode: ComparisonMode | string;
   source_a: string | null;
   source_b?: string | null;
-  runtime_connector_name?: string | null;
   decision: string;
   summary: string;
   disposable_sample_run: boolean;
