@@ -274,6 +274,37 @@ RATEGUARD_CORS_ORIGINS: '${CANDIDATE_CORS_ORIGINS}'
 ENV
 }
 
+# Reliable tagged-URL discovery via `--format=json` + a small Python filter.
+# The single-expression gcloud format filter this used to rely on --
+# `--format "value(status.traffic[?tag==\"...\"].url)"` -- returns empty on
+# current gcloud (tested on Google Cloud SDK 581.0.0 / core 2026.08.14) even
+# though `--format="json(status.traffic)"` shows the entry is genuinely
+# present, so it silently aborted every deploy right after a real, successful
+# `gcloud run deploy`. This never fabricates a URL: empty stdin/JSON or no
+# matching tag both simply produce no output, same failure mode as before.
+get_tagged_url() {
+  local service="$1"
+  # `command -v python3` alone is not enough: on Windows it can resolve to a
+  # non-functional Microsoft Store shim that exits nonzero on any real
+  # invocation, so the candidate is verified to actually run before use.
+  local py=python3
+  if ! "$py" -c "" >/dev/null 2>&1; then
+    py=python
+  fi
+  gcloud run services describe "$service" --region "$REGION" --format=json 2>/dev/null \
+    | "$py" -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for entry in data.get('status', {}).get('traffic', []) or []:
+    if entry.get('tag') == '${CANDIDATE_TAG}':
+        print(entry.get('url', ''))
+        break
+"
+}
+
 deploy_candidate() {
   echo "========================================================"
   echo "   RateGuard AI -- Deploying Candidate (--deploy-candidate)"
@@ -303,8 +334,7 @@ deploy_candidate() {
   # into the untagged URL (the previous fallback here could silently produce
   # a URL that was never actually deployed). A missing candidate URL stops
   # the script before any Pub/Sub or frontend step runs.
-  CANDIDATE_API_URL=$(gcloud run services describe rateguard-api --region "$REGION" \
-    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)")
+  CANDIDATE_API_URL=$(get_tagged_url rateguard-api)
   if [ -z "$CANDIDATE_API_URL" ]; then
     echo "Error: could not discover the candidate-tagged URL for rateguard-api. Refusing to fabricate one. Stopping before any Pub/Sub or frontend step." >&2
     exit 1
@@ -318,8 +348,7 @@ deploy_candidate() {
     --no-allow-unauthenticated --service-account "$RUNTIME_SA" \
     --memory=1Gi --env-vars-file="$CANDIDATE_ENV_FILE"
 
-  CANDIDATE_WORKER_URL=$(gcloud run services describe rateguard-worker --region "$REGION" \
-    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)")
+  CANDIDATE_WORKER_URL=$(get_tagged_url rateguard-worker)
   if [ -z "$CANDIDATE_WORKER_URL" ]; then
     echo "Error: could not discover the candidate-tagged URL for rateguard-worker. Refusing to fabricate one. Stopping before any Pub/Sub or frontend step." >&2
     exit 1
@@ -399,8 +428,7 @@ deploy_candidate() {
     --image "$FRONTEND_IMAGE" --region "$REGION" --platform managed \
     --no-traffic --tag "$CANDIDATE_TAG" --allow-unauthenticated
 
-  CANDIDATE_WEB_URL=$(gcloud run services describe rateguard-web --region "$REGION" \
-    --format "value(status.traffic[?tag==\"${CANDIDATE_TAG}\"].url)" 2>/dev/null || true)
+  CANDIDATE_WEB_URL=$(get_tagged_url rateguard-web || true)
 
   rm -f "$CANDIDATE_ENV_FILE"
 
