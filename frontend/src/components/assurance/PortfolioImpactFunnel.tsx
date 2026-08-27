@@ -83,7 +83,9 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true, neutralLa
           </span>
           {isClean
             ? 'Deterministic execution across the 50,000 policy portfolio confirmed $0.00 financial exposure and 0 affected policies.'
-            : 'Evaluating pricing intent against target engine implementation across synthetic risk distribution parameters.'}
+            : neutralLabels
+              ? 'Evaluating Source A against Source B across synthetic risk distribution parameters.'
+              : 'Evaluating pricing intent against target engine implementation across synthetic risk distribution parameters.'}
         </div>
       </div>
 
@@ -139,7 +141,7 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true, neutralLa
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-bold text-rose-300 flex items-center gap-2">
               <TrendingDown className="h-4 w-4 text-rose-400" />
-              Carrier Undercharge (Revenue Leakage)
+              {neutralLabels ? 'Source B Lower Than Source A' : 'Carrier Undercharge (Revenue Leakage)'}
             </h4>
             <span className="font-mono text-xs font-bold text-rose-400">
               {formatCount(underchargeCount)} policies
@@ -148,16 +150,20 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true, neutralLa
           <div className="text-3xl font-extrabold text-rose-400 font-mono">
             {formatCurrency(underchargeAmount)}
           </div>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            {neutralLabels ? 'Source B' : 'Target rating engine'} under-billed policyholders due to defective discounts or factor reductions.
-          </p>
+          {underchargeCount > 0 && (
+            <p className="text-xs text-slate-400 leading-relaxed">
+              {neutralLabels
+                ? 'Absolute financial difference where Source B produced lower premiums than Source A.'
+                : 'Target rating engine under-billed policyholders due to defective discounts or factor reductions.'}
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-amber-900/50 bg-amber-950/20 p-5 space-y-2">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-bold text-amber-300 flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-amber-400" />
-              Policyholder Overcharge (Regulatory Risk)
+              {neutralLabels ? 'Source B Higher Than Source A' : 'Policyholder Overcharge (Regulatory Risk)'}
             </h4>
             <span className="font-mono text-xs font-bold text-amber-400">
               {formatCount(overchargeCount)} policies
@@ -166,9 +172,13 @@ export function PortfolioImpactFunnel({ portfolio, isCompleted = true, neutralLa
           <div className="text-3xl font-extrabold text-amber-400 font-mono">
             {formatCurrency(overchargeAmount)}
           </div>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            {neutralLabels ? 'Source B charged higher than Source A' : 'Target engine charged higher than actuarial filing intent'}, triggering consumer compliance risk.
-          </p>
+          {overchargeCount > 0 && (
+            <p className="text-xs text-slate-400 leading-relaxed">
+              {neutralLabels
+                ? 'Absolute financial difference where Source B produced higher premiums than Source A.'
+                : 'Target engine charged higher than actuarial filing intent, triggering consumer compliance risk.'}
+            </p>
+          )}
         </div>
       </div>
 

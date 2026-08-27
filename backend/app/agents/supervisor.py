@@ -15,6 +15,7 @@ from app.agents.decision_schemas import (
     MAX_ADDITIONAL_PROBE_TESTS,
     MAX_REGRESSION_TESTS,
     MAX_SELECTED_TESTS,
+    AlignmentOptionsDecision,
     DifferencePrioritizationDecision,
     EvidenceSufficiencyDecision,
     ExtractionStrategyDecision,
@@ -53,6 +54,7 @@ from app.models import (
     SemanticAnalysisData,
     ToolInvocation,
 )
+from app.services.finding_conversion import to_material_findings
 from app.services.mission_transitions import apply_transition
 from app.services.remediation_service import RemediationService
 from app.services.validation_service import MissionValidationService
@@ -543,19 +545,7 @@ class AssuranceSupervisor:
                 )
             )
 
-            sem_diffs = [
-                MaterialFinding(
-                    finding_id=f"FND-{uuid.uuid4().hex[:6].upper()}",
-                    category="SEMANTIC_DIFF",
-                    severity=diff.severity.value if hasattr(diff.severity, "value") else str(diff.severity),
-                    title=f"{diff.difference_type}: {diff.semantic_path}",
-                    description=diff.description,
-                    intent_value=str(diff.left_value),
-                    target_value=str(diff.right_value),
-                    affected_node=getattr(diff, "node_id", None),
-                )
-                for diff in raw_diff_result.differences
-            ]
+            sem_diffs = to_material_findings(raw_diff_result)
             # Computed AFTER sem_diffs is populated so the persisted count is correct
             # (previously this was computed against the empty list before assignment).
             sem_summary = f"{len(sem_diffs)} AST semantic differences identified."
@@ -1206,109 +1196,170 @@ class AssuranceSupervisor:
             all_diffs = result.semantic_analysis.data.differences
             finding_ids = {d.finding_id for d in all_diffs}
 
-            # Real Gemini decision point: propose a structured remediation candidate
-            # by selecting which confirmed findings to correct. Gemini may only
-            # choose finding_ids the diff engine already produced; the deterministic
-            # remediation service applies each finding's own recorded intent_value —
-            # Gemini never supplies or invents a corrected number itself.
-            if self._is_cancelled(mission.mission_id, cancellation_check):
-                return self._finalize_cancelled(mission, result, agent_actions)
-
-            decision, evidence = self._ask_gemini(
-                mission.mission_id, budget, "PROPOSE_REMEDIATION", RemediationProposalDecision,
-                system_instruction=(
-                    "You are the RateGuard Assurance Supervisor proposing a structured remediation "
-                    "candidate. You MUST only select finding_ids from the provided list, and MUST NOT "
-                    "invent a corrected value — the deterministic remediation service applies each "
-                    "finding's own recorded intent_value."
-                ),
-                prompt=(
-                    "Confirmed findings (JSON): "
-                    f"{[{'finding_id': d.finding_id, 'title': d.title, 'severity': d.severity} for d in all_diffs]}\n"
-                    "Select which finding_ids the remediation candidate should correct."
-                ),
-            )
-            chosen_finding_ids = [i for i in (decision.selected_finding_ids if decision else []) if i in finding_ids]
-            if decision is not None and chosen_finding_ids:
-                target_diffs = [d for d in all_diffs if d.finding_id in chosen_finding_ids]
-                agent_actions.append(self._decision_action(
-                    "Remediation Specialist", "PROPOSE_REMEDIATION",
-                    f"Gemini proposed correcting {len(target_diffs)} of {len(all_diffs)} confirmed findings.",
-                    evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
-                ))
-            else:
-                target_diffs = all_diffs  # safe conservative default: fix every confirmed finding
-                reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
-                    evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
-                )
-                agent_actions.append(self._decision_action(
-                    "Remediation Specialist", "PROPOSE_REMEDIATION",
-                    f"Deterministic fallback: proposing correction for all {len(all_diffs)} confirmed findings.",
-                    evidence, is_gemini=False, fallback_reason=reason,
-                ))
-
-            rem_prop = self.remediation_service.generate_remediation_proposal(left_pkg, right_pkg, target_diffs)
-            result.remediation = SectionResult(
-                status=AnalysisStatus.SUCCEEDED,
-                data=rem_prop,
-            )
-
-            # Real Gemini decision point: select targeted (previously-mismatched)
-            # and regression (control) scenario ids to rerun deterministically
-            # against the patched candidate before revalidation.
-            targeted_ids: list[str] = [e.experiment_id for e in experiments_list if not e.matches]
-            control_ids = [
-                sc.id for sc in (test_plan.candidate_scenarios if test_plan is not None else [])
-                if sc.classification == ScenarioClassification.CONTROL
-            ]
-            regression_ids: list[str] = control_ids[:MAX_REGRESSION_TESTS]
-
-            if test_plan is not None and (targeted_ids or control_ids):
+            if mission.mode == ComparisonMode.EQUIVALENCE:
+                # Symmetric Equivalence: neither Source A nor Source B is presumed
+                # authoritative, so no directional patch is generated automatically
+                # here. Gemini's decision at this stage is deliberately neutral
+                # (PROPOSE_ALIGNMENT_OPTIONS, never PROPOSE_REMEDIATION) and is
+                # evidence only -- the concrete directional patch is computed on
+                # demand, only after a human explicitly picks a reference source,
+                # via POST /missions/{id}/alignment-options.
                 if self._is_cancelled(mission.mission_id, cancellation_check):
                     return self._finalize_cancelled(mission, result, agent_actions)
 
-                decision2, evidence2 = self._ask_gemini(
-                    mission.mission_id, budget, "SELECT_REVALIDATION_TESTS", RemediationRevalidationSelectionDecision,
+                decision, evidence = self._ask_gemini(
+                    mission.mission_id, budget, "PROPOSE_ALIGNMENT_OPTIONS", AlignmentOptionsDecision,
                     system_instruction=(
-                        "You are the RateGuard Assurance Supervisor selecting which previously-mismatched "
-                        "(targeted) and control (regression) scenario ids to rerun deterministically against "
-                        "the proposed remediation patch. Only select ids from the provided lists."
+                        "You are the RateGuard Assurance Supervisor reviewing confirmed differences "
+                        "between two symmetrically-compared pricing sources. Neither Source A nor "
+                        "Source B is presumed authoritative -- you are NOT proposing a correction and "
+                        "MUST NOT claim to restore an intended or verified value. You MUST only select "
+                        "finding_ids from the provided list. Identify which differences are material "
+                        "enough that a human should weigh them before choosing an alignment reference."
                     ),
                     prompt=(
-                        f"Previously-mismatched scenario ids (targeted candidates): {targeted_ids}\n"
-                        f"Control scenario ids (regression candidates): {control_ids}"
+                        "Confirmed differences between Source A and Source B (JSON): "
+                        f"{[{'finding_id': d.finding_id, 'title': d.title, 'severity': d.severity} for d in all_diffs]}\n"
+                        "Select which finding_ids are material to a future alignment decision."
                     ),
                 )
-                if decision2 is not None:
-                    valid_targeted = set(targeted_ids)
-                    valid_control = set(control_ids)
-                    chosen_targeted = [i for i in decision2.targeted_test_ids if i in valid_targeted] or targeted_ids
-                    chosen_regression = [i for i in decision2.regression_test_ids if i in valid_control] or regression_ids
-                    targeted_ids, regression_ids = chosen_targeted, chosen_regression
+                chosen_finding_ids = [i for i in (decision.selected_finding_ids if decision else []) if i in finding_ids]
+                if decision is not None and chosen_finding_ids:
                     agent_actions.append(self._decision_action(
-                        "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
-                        f"Gemini selected {len(targeted_ids)} targeted and {len(regression_ids)} regression scenarios for revalidation.",
-                        evidence2, is_gemini=True, needs_human_review=decision2.needs_human_review,
+                        "Alignment Specialist", "PROPOSE_ALIGNMENT_OPTIONS",
+                        f"Gemini flagged {len(chosen_finding_ids)} of {len(all_diffs)} confirmed differences as "
+                        "material to a future alignment decision. No directional patch was generated -- Source A "
+                        "and Source B are both potentially valid; a directional alignment option is available on "
+                        "demand once a reference source is selected.",
+                        evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
                     ))
                 else:
-                    reason = evidence2.failure_category if evidence2 else "CALL_BUDGET_EXHAUSTED"
+                    reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
+                        evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                    )
                     agent_actions.append(self._decision_action(
-                        "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
-                        f"Deterministic fallback: rerunning all {len(targeted_ids)} mismatched and {len(regression_ids)} control scenarios.",
-                        evidence2, is_gemini=False, fallback_reason=reason,
+                        "Alignment Specialist", "PROPOSE_ALIGNMENT_OPTIONS",
+                        f"Deterministic fallback: all {len(all_diffs)} confirmed differences remain available "
+                        "for on-demand alignment.",
+                        evidence, is_gemini=False, fallback_reason=reason,
                     ))
 
-            # Execute Revalidation
-            reval_res = self.remediation_service.revalidate_remediation(
-                left_pkg, right_pkg, rem_prop, mission.objective.portfolio_dataset,
-                scenario_pool=test_plan.candidate_scenarios if test_plan is not None else None,
-                targeted_scenario_ids=targeted_ids,
-                regression_scenario_ids=regression_ids,
-            )
-            result.revalidation = SectionResult(
-                status=AnalysisStatus.SUCCEEDED,
-                data=reval_res,
-            )
+                result.remediation = SectionResult(
+                    status=AnalysisStatus.NOT_RUN,
+                    reason=(
+                        "Equivalence mode is symmetric: neither Source A nor Source B is presumed "
+                        "authoritative, so a directional alignment patch is not generated automatically. "
+                        "Open the Alignment Options tab and select a reference source to generate one."
+                    ),
+                )
+                result.revalidation = SectionResult(
+                    status=AnalysisStatus.NOT_RUN,
+                    reason="Revalidation is generated together with the on-demand alignment option.",
+                )
+            else:
+                # Real Gemini decision point: propose a structured remediation candidate
+                # by selecting which confirmed findings to correct. Gemini may only
+                # choose finding_ids the diff engine already produced; the deterministic
+                # remediation service applies each finding's own recorded intent_value —
+                # Gemini never supplies or invents a corrected number itself.
+                if self._is_cancelled(mission.mission_id, cancellation_check):
+                    return self._finalize_cancelled(mission, result, agent_actions)
+
+                decision, evidence = self._ask_gemini(
+                    mission.mission_id, budget, "PROPOSE_REMEDIATION", RemediationProposalDecision,
+                    system_instruction=(
+                        "You are the RateGuard Assurance Supervisor proposing a structured remediation "
+                        "candidate. You MUST only select finding_ids from the provided list, and MUST NOT "
+                        "invent a corrected value — the deterministic remediation service applies each "
+                        "finding's own recorded intent_value."
+                    ),
+                    prompt=(
+                        "Confirmed findings (JSON): "
+                        f"{[{'finding_id': d.finding_id, 'title': d.title, 'severity': d.severity} for d in all_diffs]}\n"
+                        "Select which finding_ids the remediation candidate should correct."
+                    ),
+                )
+                chosen_finding_ids = [i for i in (decision.selected_finding_ids if decision else []) if i in finding_ids]
+                if decision is not None and chosen_finding_ids:
+                    target_diffs = [d for d in all_diffs if d.finding_id in chosen_finding_ids]
+                    agent_actions.append(self._decision_action(
+                        "Remediation Specialist", "PROPOSE_REMEDIATION",
+                        f"Gemini proposed correcting {len(target_diffs)} of {len(all_diffs)} confirmed findings.",
+                        evidence, is_gemini=True, needs_human_review=decision.needs_human_review,
+                    ))
+                else:
+                    target_diffs = all_diffs  # safe conservative default: fix every confirmed finding
+                    reason = "NO_VALID_IDS_IN_RESPONSE" if decision is not None else (
+                        evidence.failure_category if evidence else "CALL_BUDGET_EXHAUSTED"
+                    )
+                    agent_actions.append(self._decision_action(
+                        "Remediation Specialist", "PROPOSE_REMEDIATION",
+                        f"Deterministic fallback: proposing correction for all {len(all_diffs)} confirmed findings.",
+                        evidence, is_gemini=False, fallback_reason=reason,
+                    ))
+
+                rem_prop = self.remediation_service.generate_remediation_proposal(left_pkg, right_pkg, target_diffs)
+                result.remediation = SectionResult(
+                    status=AnalysisStatus.SUCCEEDED,
+                    data=rem_prop,
+                )
+
+                # Real Gemini decision point: select targeted (previously-mismatched)
+                # and regression (control) scenario ids to rerun deterministically
+                # against the patched candidate before revalidation.
+                targeted_ids: list[str] = [e.experiment_id for e in experiments_list if not e.matches]
+                control_ids = [
+                    sc.id for sc in (test_plan.candidate_scenarios if test_plan is not None else [])
+                    if sc.classification == ScenarioClassification.CONTROL
+                ]
+                regression_ids: list[str] = control_ids[:MAX_REGRESSION_TESTS]
+
+                if test_plan is not None and (targeted_ids or control_ids):
+                    if self._is_cancelled(mission.mission_id, cancellation_check):
+                        return self._finalize_cancelled(mission, result, agent_actions)
+
+                    decision2, evidence2 = self._ask_gemini(
+                        mission.mission_id, budget, "SELECT_REVALIDATION_TESTS", RemediationRevalidationSelectionDecision,
+                        system_instruction=(
+                            "You are the RateGuard Assurance Supervisor selecting which previously-mismatched "
+                            "(targeted) and control (regression) scenario ids to rerun deterministically against "
+                            "the proposed remediation patch. Only select ids from the provided lists."
+                        ),
+                        prompt=(
+                            f"Previously-mismatched scenario ids (targeted candidates): {targeted_ids}\n"
+                            f"Control scenario ids (regression candidates): {control_ids}"
+                        ),
+                    )
+                    if decision2 is not None:
+                        valid_targeted = set(targeted_ids)
+                        valid_control = set(control_ids)
+                        chosen_targeted = [i for i in decision2.targeted_test_ids if i in valid_targeted] or targeted_ids
+                        chosen_regression = [i for i in decision2.regression_test_ids if i in valid_control] or regression_ids
+                        targeted_ids, regression_ids = chosen_targeted, chosen_regression
+                        agent_actions.append(self._decision_action(
+                            "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
+                            f"Gemini selected {len(targeted_ids)} targeted and {len(regression_ids)} regression scenarios for revalidation.",
+                            evidence2, is_gemini=True, needs_human_review=decision2.needs_human_review,
+                        ))
+                    else:
+                        reason = evidence2.failure_category if evidence2 else "CALL_BUDGET_EXHAUSTED"
+                        agent_actions.append(self._decision_action(
+                            "Remediation Specialist", "SELECT_REVALIDATION_TESTS",
+                            f"Deterministic fallback: rerunning all {len(targeted_ids)} mismatched and {len(regression_ids)} control scenarios.",
+                            evidence2, is_gemini=False, fallback_reason=reason,
+                        ))
+
+                # Execute Revalidation
+                reval_res = self.remediation_service.revalidate_remediation(
+                    left_pkg, right_pkg, rem_prop, mission.objective.portfolio_dataset,
+                    scenario_pool=test_plan.candidate_scenarios if test_plan is not None else None,
+                    targeted_scenario_ids=targeted_ids,
+                    regression_scenario_ids=regression_ids,
+                )
+                result.revalidation = SectionResult(
+                    status=AnalysisStatus.SUCCEEDED,
+                    data=reval_res,
+                )
         else:
             result.remediation = SectionResult(
                 status=AnalysisStatus.NOT_RUN,

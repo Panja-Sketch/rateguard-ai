@@ -54,83 +54,36 @@ def test_pubsub_publisher_mocked():
     assert mock_client.publish.called
 
 
-def test_assurance_worker_execution():
-    """Tests AssuranceWorker processing an assurance job."""
+def test_worker_rejects_non_mission_v2_run_id():
+    """The pre-V2 'RUN-*' agentic pipeline has been retired -- no code path
+    can create a new 'RUN-*' job any more, so an unrecognized non-terminal
+    'RUN-*' id is a poison message, not silently dropped or guessed at."""
     store = InMemoryRunStore()
-    runner = MagicMock()
-    mock_report = MagicMock()
-    mock_report.status = "BLOCK_DEPLOYMENT"
-    mock_report.executive_summary = "Defects found"
-    mock_report.evidence_refs = []
-    mock_report.confidence = 1.0
-    runner.run_assurance.return_value = mock_report
+    worker = AssuranceWorker(run_store=store)
 
-    worker = AssuranceWorker(run_store=store, runner=runner)
-    job = AssuranceJob(
-        job_id="JOB-100",
-        run_id="RUN-100",
-        left_package_id="AZ_HO3_2026_09",
-        right_package_id="AZ_HO3_2026_09_DEFECTIVE",
-    )
+    job = AssuranceJob(job_id="JOB-LEGACY-1", run_id="RUN-LEGACY-1")
 
     res = worker.process_job(job)
 
-    assert res.outcome == ProcessingOutcome.SUCCEEDED
-    assert res.decision == "BLOCK_DEPLOYMENT"
-    assert res.should_ack is True
-
-    run_record = store.get_run("RUN-100")
-    assert run_record is not None
-    assert run_record.status == AssuranceRunStatus.COMPLETED
-
-    events = store.get_events("RUN-100")
-    assert len(events) >= 5
+    assert res.outcome == ProcessingOutcome.TERMINAL_INVALID_MESSAGE
+    assert res.should_ack is False
 
 
-def test_assurance_worker_idempotency_skips_completed():
-    """Verifies AssuranceWorker skips execution if run is already COMPLETED."""
+def test_worker_acks_stale_redelivery_of_completed_legacy_run():
+    """A Pub/Sub redelivery of an already-terminal historical 'RUN-*' record
+    (from before the legacy pipeline was retired) must be acked as a
+    harmless duplicate, not treated as poison -- poison messages are never
+    acked, which would leave a genuinely-finished old run retrying forever."""
     store = InMemoryRunStore()
-    runner = MagicMock()
+    store.save_run(AssuranceRunRecord(run_id="RUN-OLD-COMPLETED", status=AssuranceRunStatus.COMPLETED))
+    worker = AssuranceWorker(run_store=store)
 
-    # Pre-populate run record as COMPLETED
-    record = AssuranceRunRecord(
-        run_id="RUN-200",
-        status=AssuranceRunStatus.COMPLETED,
-        workflow_stage="COMPLETED",
-    )
-    store.save_run(record)
-
-    worker = AssuranceWorker(run_store=store, runner=runner)
-    job = AssuranceJob(job_id="JOB-200", run_id="RUN-200")
+    job = AssuranceJob(job_id="JOB-REDELIVERED", run_id="RUN-OLD-COMPLETED")
 
     res = worker.process_job(job)
 
     assert res.outcome == ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED
     assert res.should_ack is True
-    assert not runner.run_assurance.called
-
-
-def test_worker_routes_legacy_run_id_to_legacy_handler_regardless_of_job_type():
-    """Legacy RUN-* jobs currently carry the AssuranceJob.job_type default
-    ('ASSURANCE_MISSION_V2') because that field's default isn't legacy-aware — the
-    run_id ID scheme, not job_type, must remain the authoritative dispatch key so
-    these are NOT misrouted or rejected."""
-    store = InMemoryRunStore()
-    runner = MagicMock()
-    mock_report = MagicMock()
-    mock_report.status = "PASS"
-    mock_report.executive_summary = "ok"
-    mock_report.evidence_refs = []
-    runner.run_assurance.return_value = mock_report
-
-    worker = AssuranceWorker(run_store=store, runner=runner)
-    job = AssuranceJob(job_id="JOB-LEGACY-1", run_id="RUN-LEGACY-1")  # job_type defaults to ASSURANCE_MISSION_V2
-
-    res = worker.process_job(job)
-
-    assert res.outcome == ProcessingOutcome.SUCCEEDED
-    assert res.should_ack is True
-    assert runner.run_assurance.called
 
 
 def test_worker_rejects_mission_v2_id_with_mismatched_job_type():
@@ -139,7 +92,7 @@ def test_worker_rejects_mission_v2_id_with_mismatched_job_type():
     pipeline."""
     store = InMemoryRunStore()
     store.save_run(AssuranceRunRecord(run_id="MIS-MISMATCH-1", status=AssuranceRunStatus.QUEUED))
-    worker = AssuranceWorker(run_store=store, runner=MagicMock())
+    worker = AssuranceWorker(run_store=store)
 
     job = AssuranceJob(job_id="JOB-MISMATCH-1", run_id="MIS-MISMATCH-1", job_type="SOME_OTHER_TYPE")
 
@@ -153,7 +106,7 @@ def test_worker_rejects_mission_v2_id_with_mismatched_job_type():
 def test_worker_dispatches_mission_v2_id_with_matching_job_type():
     store = InMemoryRunStore()
     store.save_run(AssuranceRunRecord(run_id="MIS-MATCH-1", status=AssuranceRunStatus.QUEUED))
-    worker = AssuranceWorker(run_store=store, runner=MagicMock())
+    worker = AssuranceWorker(run_store=store)
 
     job = AssuranceJob(job_id="JOB-MATCH-1", run_id="MIS-MATCH-1", job_type="ASSURANCE_MISSION_V2")
 

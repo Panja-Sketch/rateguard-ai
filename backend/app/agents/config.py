@@ -26,7 +26,7 @@ def validate_gemini_model(model_name: str) -> str:
 
 
 class AgentConfig(BaseModel):
-    """Configuration settings for Google ADK and Gemini Multi-Agent Orchestration."""
+    """Configuration settings for the Google GenAI SDK / Gemini structured-decision supervisor."""
 
     gemini_model: str = os.getenv("RATEGUARD_GEMINI_MODEL", "gemini-3.7-flash")
     agent_enabled: bool = os.getenv("RATEGUARD_AGENT_ENABLED", "true").lower() == "true"

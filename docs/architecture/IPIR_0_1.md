@@ -12,7 +12,7 @@ Insurance pricing specifications move across disparate media and vendor runtimes
 1. **Vendor-Neutral & Source-Agnostic:** IPIR models pricing concepts (rate tables, conditions, expressions, modifiers, rounding) without hardcoding vendor-specific constructs (such as Guidewire Gosu, Duck Creek XML, or Excel cell references). Vendor metadata is kept strictly in provenance attributes.
 2. **Bidirectional Semantic Comparison:** IPIR is designed to allow any pricing representation $IPIR_A$ to be compared against any other representation $IPIR_B$ (e.g., Regulatory Filing ↔ Actuarial Workbook, Actuarial Workbook ↔ Guidewire Configuration).
 3. **Deterministic Math & Decimal Precision:** Authoritative pricing values, money, factors, percentages, and constants strictly use arbitrary-precision Python `Decimal` data types. Binary floating-point representation (`float`) is prohibited to eliminate rounding drift.
-4. **Deterministic Execution Philosophy:** AI models (Gemini / ADK agents) assist in parsing source materials and explaining diffs, but **never** execute authoritative premium arithmetic. IPIR is evaluated solely by deterministic software engines.
+4. **Deterministic Execution Philosophy:** Gemini (via the Google GenAI SDK) assists in prioritizing differences and explaining findings, but **never** executes authoritative premium arithmetic. IPIR is evaluated solely by deterministic software engines.
 5. **Auditable Lineage & Provenance:** Every rate factor, rule, and calculation node retains metadata linking back to source filings, pages, sections, or database versions with explicit confidence metrics.
 
 ---

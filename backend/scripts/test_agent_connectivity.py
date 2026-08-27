@@ -13,11 +13,11 @@ def main() -> None:
     config = get_agent_config()
 
     print("\n========================================================")
-    print("      RateGuard Google ADK / Gemini Connectivity Test   ")
+    print("      RateGuard Google GenAI SDK / Gemini Connectivity Test   ")
     print("========================================================\n")
     print(f"Configured Model:     {config.gemini_model}")
     print(f"Google Cloud Project: {config.google_cloud_project}")
-    print("Agent Framework:      Google ADK")
+    print("Agent Framework:      Google GenAI SDK (structured-decision supervisor)")
     print(f"Agent Enabled:        {config.agent_enabled}\n")
 
     try:

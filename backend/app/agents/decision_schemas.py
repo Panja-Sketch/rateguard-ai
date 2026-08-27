@@ -77,6 +77,21 @@ class RemediationProposalDecision(GeminiDecisionBase):
     selected_finding_ids: list[str] = Field(min_length=1, max_length=MAX_REMEDIATION_FINDINGS)
 
 
+class AlignmentOptionsDecision(GeminiDecisionBase):
+    """Symmetric-Equivalence counterpart to RemediationProposalDecision.
+
+    Neither Source A nor Source B is presumed authoritative here, so this
+    decision never proposes a correction or a "restored intent" value -- it
+    only flags which confirmed differences are material enough that a human
+    should weigh them before choosing an alignment reference. The concrete
+    directional patch is generated on demand, only after that human choice,
+    via POST /missions/{id}/alignment-options -- never automatically here.
+    """
+
+    decision_type: Literal["PROPOSE_ALIGNMENT_OPTIONS"] = "PROPOSE_ALIGNMENT_OPTIONS"
+    selected_finding_ids: list[str] = Field(min_length=1, max_length=MAX_REMEDIATION_FINDINGS)
+
+
 class RemediationRevalidationSelectionDecision(GeminiDecisionBase):
     """Selects targeted (previously-mismatched) and regression (control)
     scenario IDs to rerun deterministically against the patched candidate."""

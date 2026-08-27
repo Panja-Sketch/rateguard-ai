@@ -32,8 +32,9 @@ RateGuard runs a mandatory deterministic evidence pipeline unconditionally (vali
 | `SELECT_BOUNDARY_TESTS` | Which deterministically-generated candidate boundary tests to execute | Whenever semantic differences exist |
 | `EVIDENCE_SUFFICIENCY` | Whether one more bounded round of probes is worth running (capped at `MAX_PROBE_ROUNDS`) | After the first boundary-test round |
 | `PORTFOLIO_JUSTIFICATION` | Whether the costly full 50K-policy scan is still warranted | Only when zero premium mismatches were reproduced despite detected differences |
-| `PROPOSE_REMEDIATION` | What isolated patch would resolve a confirmed defect | Whenever a mismatch is reproduced |
-| `SELECT_REVALIDATION_TESTS` | Which targeted + regression tests to re-run against the proposed patch | Whenever a remediation is proposed |
+| `PROPOSE_REMEDIATION` | What isolated patch would resolve a confirmed defect | Release Conformance mode, whenever a mismatch is reproduced |
+| `PROPOSE_ALIGNMENT_OPTIONS` | Which confirmed differences are material to a future alignment decision — never a directional fix | Equivalence mode, whenever a difference is reproduced (neither source is presumed authoritative, so no patch is generated here — see below) |
+| `SELECT_REVALIDATION_TESTS` | Which targeted + regression tests to re-run against the proposed patch | Release Conformance mode, whenever a remediation is proposed |
 
 A judge running the standard demo path — a `RELEASE_CONFORMANCE` mission against the bundled defective target, ending in `BLOCK_DEPLOYMENT` — will see exactly **five** invocations in the Gemini Action Timeline: prioritization, boundary-test selection, evidence sufficiency, remediation proposal, and revalidation selection. Portfolio justification and extraction strategy are real code paths but conditional on the specific mission (respectively: zero reproduced mismatches, and an ambiguous uploaded source), so they won't appear in that run — this table describes what exists in the code, and the sentence above describes what one concrete production mission actually shows.
 
@@ -83,7 +84,7 @@ The API validates a mission request synchronously (~2ms), persists it as `QUEUED
 ## Key Features
 
 - **Release Conformance** — verifies a target rating engine implementation conforms to an authoritative filing intent.
-- **Symmetric Equivalence** — compares two sources with neither assumed authoritative; checked both A→B and B→A to prove the result is genuinely symmetric, not an artifact of comparison order.
+- **Symmetric Equivalence** — compares two sources with neither assumed authoritative: no directional patch is generated during the mission itself, and a human must explicitly pick a reference before one is computed on demand, in either direction.
 - **Semantic diffing** — structural AST comparison classifying value, range, rule, order, effective-date, and rounding changes.
 - **Dependency impact graph** — traces a diff through the pricing calculation DAG to every downstream affected node and output.
 - **Risk-directed boundary testing** — generates targeted test scenarios at range boundaries and interaction points instead of brute-forcing the input space, and reports the real reduction (candidates pruned vs. selected) achieved.
@@ -234,9 +235,9 @@ Deployment to Google Cloud Run follows a staged pipeline, implemented in `infras
 1. Open the [production site](https://rateguard-web-iqofutwtva-uc.a.run.app).
 2. Visit **Missions → New Mission**, pick **Release Conformance**, and run the bundled Arizona HO3 canonical-vs-defective scenario — expect a `BLOCK_DEPLOYMENT` decision with a quantified financial exposure and a proposed remediation.
 3. Run the same wizard again with the **clean control** target — expect `PASS` with zero diffs, and note the "Gemini not invoked by design" messaging.
-4. Pick **Equivalence** mode and run it both A→B and B→A — confirm the decision is identical in both directions.
+4. Pick **Equivalence** mode and run it — note that Material Findings, Blast Radius, and every other tab use neutral "Source A" / "Source B" language throughout, never "intent" or "defective." Open the **Alignment Options** tab: no directional patch exists yet (Gemini's decision there was the neutral `PROPOSE_ALIGNMENT_OPTIONS`, not a proposed fix) — pick either Source A or Source B as the reference to generate one on demand, then pick the other to see the patch flip direction.
 5. Visit **Sources**, download the two sample `.json` templates (or upload your own — see [Supported Source Format: JSON Schema](#supported-source-format-json-schema)), compile them for Source A and B, review the compilation receipt for each, and launch a mission from the real compiled sources.
-6. Open the mission detail page and walk the tabs: Material Findings, Dependency DAG, Boundary Experiments, Reconciliation & RCA, Blast Radius, Remediation & Revalidation, Evidence Lineage, and the Gemini Action Timeline.
+6. Open the mission detail page and walk the tabs: Material Findings, Dependency DAG, Boundary Experiments, Reconciliation & RCA, Blast Radius, Remediation & Revalidation (Alignment Options in Equivalence mode), Evidence Lineage, and the Gemini Action Timeline.
 
 ## Screenshots & Video
 
@@ -244,7 +245,7 @@ _Add links to a demo video and screenshots here before final submission._
 
 ## Test Results
 
-- **Backend:** 391 tests passing (`pytest`), covering mission lifecycle, validation, the Gemini supervisor's decision points and fallback paths (including the conservative-release gates below), Pub/Sub worker delivery/idempotency, cross-process artifact storage, and API-level contract tests.
+- **Backend:** 389 tests passing (`pytest`), covering mission lifecycle, validation, the Gemini supervisor's decision points and fallback paths (including the conservative-release gates below and the on-demand Equivalence-mode alignment endpoint), Pub/Sub worker delivery/idempotency, cross-process artifact storage, and API-level contract tests.
 - **Frontend:** clean `tsc --noEmit` typecheck across the app.
 - **Deployed acceptance tests** (`scripts/verify_deployed_system.py`, `docs/demo/DEPLOYED_ACCEPTANCE_TEST.md`): clean `RELEASE_CONFORMANCE` run → `PASS`; defective `RELEASE_CONFORMANCE` run → `BLOCK_DEPLOYMENT` with a quantified blast radius; symmetric `EQUIVALENCE` run in both directions → matching `PASS`.
 
@@ -255,6 +256,20 @@ A pricing-assurance tool that reports a false `PASS` is worse than one that repo
 - **Behavioral evidence overrides a clean AST diff.** If the boundary-testing probes compute different premiums for Source A and Source B, that blocks the release (`BLOCK_DEPLOYMENT`) even when the semantic differ reports zero structural differences — the AST comparison catching nothing does not mean nothing changed.
 - **Low-confidence extraction forces human review.** Any source compiled below `LOW_CONFIDENCE_REVIEW_THRESHOLD` never silently supports a `PASS` — the mission is downgraded to `REVIEW_REQUIRED`, even if every other signal agrees.
 - **Product or jurisdiction mismatches are surfaced, not compared away.** Comparing a Homeowners source against a Personal Auto source, or two different states, isn't a meaningful equivalence check. RateGuard detects the metadata mismatch from the compiled packages and returns `REVIEW_REQUIRED` with the specific reason, instead of quietly running a comparison that was never apples-to-apples.
+
+## Limitations
+
+RateGuard is scoped to what it can verify end-to-end, not what would look impressive unverified:
+
+- **Source ingestion is JSON-only today.** Excel and PDF adapter code exists (`backend/app/adapters/`) but is not exposed through the API — extraction accuracy against real filings hasn't been proven, so uploads are rejected rather than silently approximated. YAML/CSV have no adapter at all.
+- **The 50,000-policy portfolio is synthetic**, generated for demo/testing purposes (`data/portfolio/`) — it is not real production policy data, and blast-radius dollar figures are illustrative of the methodology, not an actual carrier's exposure.
+- **Gemini's discretion is narrow by design.** It selects among deterministically-generated candidates at a handful of fixed pipeline stages; it never performs pricing arithmetic and can't be prompted into doing so. This is a deliberate scope boundary, not a current gap — see [The Deterministic Boundary](#the-deterministic-boundary).
+- **Single-tenant, single-region deployment.** No multi-tenant isolation, no authentication/authorization layer on the API beyond what Cloud Run's IAM provides at the infrastructure level — this is a hackathon-scope deployment, not a hardened multi-customer SaaS product.
+- **Portfolio exposure calculations run against one synthetic Arizona HO3 dataset.** Other lines of business (auto, commercial) can compile and compare via IPIR, but the bundled 50K-policy blast-radius dataset is specific to this one product/jurisdiction; a different line's portfolio scan needs its own dataset wired in.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
 
 ## Repository Structure
 

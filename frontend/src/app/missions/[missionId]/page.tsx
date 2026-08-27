@@ -9,6 +9,8 @@ import {
   getAssuranceRunEvidence,
   cancelAssuranceMission,
   retryAssuranceMission,
+  generateAlignmentOptions,
+  AlignmentOptionsResult,
   ApiError,
 } from '@/lib/api/client';
 import { AssuranceMissionDetail, AssuranceResultV2, EvidenceRecord, WorkflowEvent } from '@/lib/types/assurance';
@@ -69,11 +71,28 @@ export default function MissionDetailPage() {
   const [retrying, setRetrying] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  // In symmetric Equivalence mode, neither source is authoritative, but a
-  // directional patch computation inherently has to pick one side as the
-  // reference. That assumption must be explicit and opt-in, never presented
-  // as an unqualified regulatory conclusion by default.
-  const [alignmentBaselineConfirmed, setAlignmentBaselineConfirmed] = useState(false);
+  // In symmetric Equivalence mode, neither source is authoritative, so no
+  // directional patch is computed during the mission run at all. A human
+  // must explicitly pick which source to treat as the reference; only then
+  // is the patch generated on demand (POST /missions/{id}/alignment-options).
+  const [alignmentReference, setAlignmentReference] = useState<'A' | 'B' | null>(null);
+  const [alignmentOptions, setAlignmentOptions] = useState<AlignmentOptionsResult | null>(null);
+  const [alignmentLoading, setAlignmentLoading] = useState(false);
+  const [alignmentError, setAlignmentError] = useState<string | null>(null);
+
+  const chooseAlignmentReference = useCallback(async (reference: 'A' | 'B') => {
+    setAlignmentReference(reference);
+    setAlignmentLoading(true);
+    setAlignmentError(null);
+    try {
+      const result = await generateAlignmentOptions(missionId, reference);
+      setAlignmentOptions(result);
+    } catch (err) {
+      setAlignmentError(err instanceof ApiError ? err.message : 'Failed to generate alignment options.');
+    } finally {
+      setAlignmentLoading(false);
+    }
+  }, [missionId]);
 
   const [activeTab, setActiveTab] = useState<
     'summary' | 'semantic' | 'impact' | 'experiments' | 'recon' | 'blast' | 'remediation' | 'evidence' | 'agent'
@@ -640,93 +659,181 @@ export default function MissionDetailPage() {
 
           {/* Tab 7: Remediation & Revalidation / Alignment Options */}
           {activeTab === 'remediation' && (
-            remediationSec?.status === 'SUCCEEDED' && remediationSec?.data ? (
-              isEquivalence && !alignmentBaselineConfirmed ? (
+            isEquivalence ? (
+              !alignmentReference ? (
                 <div className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-6 space-y-4 text-center">
                   <AlertTriangle className="h-8 w-8 text-amber-400 mx-auto" />
                   <div className="text-sm font-bold text-amber-200">
                     Equivalence mode does not treat either source as authoritative
                   </div>
                   <p className="text-xs text-amber-200/80 max-w-lg mx-auto leading-relaxed">
-                    A directional alignment patch has to reference one side. The computation below assumes{' '}
-                    <strong>Source A as the reference point</strong> — that is a computational necessity, not a
-                    finding that Source A is correct. Confirm to view what changing Source B to match Source A
-                    would look like.
+                    Neither Source A nor Source B is presumed correct — RateGuard did not compute a directional
+                    patch during this mission run. A directional alignment option has to reference one side, so
+                    pick which source you want treated as the alignment reference to generate one on demand.
                   </p>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => chooseAlignmentReference('A')}
+                      className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-500"
+                    >
+                      Use Source A as reference <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => chooseAlignmentReference('B')}
+                      className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
+                    >
+                      Use Source B as reference <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : alignmentLoading ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
+                  Generating alignment option relative to Source {alignmentReference}…
+                </div>
+              ) : alignmentError ? (
+                <div className="rounded-xl border border-rose-800/60 bg-rose-950/20 p-6 space-y-3 text-center">
+                  <AlertTriangle className="h-8 w-8 text-rose-400 mx-auto" />
+                  <div className="text-sm font-bold text-rose-200">{alignmentError}</div>
                   <button
-                    onClick={() => setAlignmentBaselineConfirmed(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-500"
+                    onClick={() => setAlignmentReference(null)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 hover:bg-slate-800"
                   >
-                    View alignment options (Source A as reference) <ArrowRight className="h-3.5 w-3.5" />
+                    Try again
                   </button>
                 </div>
-              ) : (
-              <div className="space-y-6">
-                <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
+              ) : alignmentOptions ? (
+                <div className="space-y-6">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      <Check className="h-5 w-5 text-sky-400" /> {isEquivalence ? 'Alignment Option (relative to Source A)' : remediationSec.data.title}
-                    </h3>
-                    <span className="font-mono text-xs text-sky-300 rounded bg-sky-950 px-2.5 py-0.5 border border-sky-800">
-                      {remediationSec.data.derived_package_id}
+                    <span className="text-xs text-slate-400">
+                      Reference: <span className="font-bold text-white">Source {alignmentOptions.reference}</span> —{' '}
+                      {alignmentOptions.difference_count} difference{alignmentOptions.difference_count === 1 ? '' : 's'} aligned
                     </span>
+                    <button
+                      onClick={() => { setAlignmentReference(null); setAlignmentOptions(null); }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
+                    >
+                      <RotateCcw className="h-3 w-3" /> Change reference
+                    </button>
                   </div>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {isEquivalence
-                      ? 'Neither source is authoritative in Equivalence mode. Shown below is one possible alignment: the changes that would make Source B compute the same premiums as Source A for the scenarios tested.'
-                      : remediationSec.data.rationale}
-                  </p>
 
-                  {/* Changes List */}
-                  <div className="space-y-2 pt-2">
-                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                      {isEquivalence ? 'Difference by scenario' : 'Proposed Modifications'}
+                  <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-bold text-white flex items-center gap-2">
+                        <Check className="h-5 w-5 text-sky-400" /> Alignment Option (relative to Source {alignmentOptions.reference})
+                      </h3>
+                      <span className="font-mono text-xs text-sky-300 rounded bg-sky-950 px-2.5 py-0.5 border border-sky-800">
+                        {alignmentOptions.remediation.derived_package_id}
+                      </span>
                     </div>
-                    {Object.entries(remediationSec.data.proposed_changes || {}).map(([key, val]: any) => (
-                      <div key={key} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs font-mono space-y-1">
-                        <div className="font-bold text-sky-300">{val.title || key}</div>
-                        <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div>{isEquivalence ? 'Source B (current):' : 'Target Value:'} <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
-                          <div>{isEquivalence ? 'Source A (reference):' : 'Proposed Value:'} <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Neither source is authoritative in Equivalence mode. Shown below is one possible alignment:
+                      the changes that would make the other source compute the same premiums as Source {alignmentOptions.reference} for the scenarios tested.
+                    </p>
 
-                {/* Revalidation Results */}
-                {revalidationSec?.status === 'SUCCEEDED' && revalidationSec?.data && (
+                    {/* Changes List */}
+                    <div className="space-y-2 pt-2">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Difference by scenario</div>
+                      {Object.entries(alignmentOptions.remediation.proposed_changes || {}).map(([key, val]: any) => (
+                        <div key={key} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs font-mono space-y-1">
+                          <div className="font-bold text-sky-300">{val.title || key}</div>
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div>Other source (current): <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
+                            <div>Source {alignmentOptions.reference} (reference): <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Revalidation Results */}
                   <div className="rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-5 space-y-4 shadow-xl">
                     <div className="flex items-center justify-between border-b border-emerald-800/60 pb-3">
                       <h4 className="text-sm font-bold text-emerald-300 flex items-center gap-2">
-                        <TrendingDown className="h-4 w-4 text-emerald-400" /> {isEquivalence ? 'Alignment Impact Analysis' : 'Remediation Revalidation Analysis'}
+                        <TrendingDown className="h-4 w-4 text-emerald-400" /> Alignment Impact Analysis
                       </h4>
                       <span className="font-mono text-xs font-bold text-emerald-400">
-                        {revalidationSec.data.exposure_eliminated_pct}% {isEquivalence ? 'Difference Eliminated' : 'Exposure Eliminated'}
+                        {alignmentOptions.revalidation.exposure_eliminated_pct}% Difference Eliminated
                       </span>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
                       <div className="rounded-lg border border-rose-900/60 bg-rose-950/30 p-3 space-y-1">
-                        <div className="text-rose-400 font-bold font-sans">{isEquivalence ? 'BEFORE Alignment Difference:' : 'BEFORE Remediation Exposure:'}</div>
-                        <div className="text-xl font-extrabold text-rose-300">${revalidationSec.data.before_absolute_exposure}</div>
-                        <div className="text-[11px] text-slate-400">{revalidationSec.data.before_affected_policies} affected policies</div>
+                        <div className="text-rose-400 font-bold font-sans">BEFORE Alignment Difference:</div>
+                        <div className="text-xl font-extrabold text-rose-300">${alignmentOptions.revalidation.before_absolute_exposure}</div>
+                        <div className="text-[11px] text-slate-400">{alignmentOptions.revalidation.before_affected_policies} affected policies</div>
                       </div>
 
                       <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 p-3 space-y-1">
-                        <div className="text-emerald-400 font-bold font-sans">{isEquivalence ? 'AFTER Alignment Difference:' : 'AFTER Remediation Exposure:'}</div>
-                        <div className="text-xl font-extrabold text-emerald-300">${revalidationSec.data.after_absolute_exposure}</div>
-                        <div className="text-[11px] text-slate-400">{revalidationSec.data.after_affected_policies} affected policies</div>
+                        <div className="text-emerald-400 font-bold font-sans">AFTER Alignment Difference:</div>
+                        <div className="text-xl font-extrabold text-emerald-300">${alignmentOptions.revalidation.after_absolute_exposure}</div>
+                        <div className="text-[11px] text-slate-400">{alignmentOptions.revalidation.after_affected_policies} affected policies</div>
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
-              )
+                </div>
+              ) : null
             ) : (
-              <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
-                Status: {remediationSec?.status || 'NOT_RUN'} — {stageStatusLine('REMEDIATION', remediationSec)}
-              </div>
+              remediationSec?.status === 'SUCCEEDED' && remediationSec?.data ? (
+                <div className="space-y-6">
+                  <div className="rounded-xl border border-sky-800/80 bg-slate-900/80 p-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-bold text-white flex items-center gap-2">
+                        <Check className="h-5 w-5 text-sky-400" /> {remediationSec.data.title}
+                      </h3>
+                      <span className="font-mono text-xs text-sky-300 rounded bg-sky-950 px-2.5 py-0.5 border border-sky-800">
+                        {remediationSec.data.derived_package_id}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">{remediationSec.data.rationale}</p>
+
+                    {/* Changes List */}
+                    <div className="space-y-2 pt-2">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Proposed Modifications</div>
+                      {Object.entries(remediationSec.data.proposed_changes || {}).map(([key, val]: any) => (
+                        <div key={key} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs font-mono space-y-1">
+                          <div className="font-bold text-sky-300">{val.title || key}</div>
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div>Target Value: <span className="text-rose-400 font-bold">{val.before_target_value}</span></div>
+                            <div>Proposed Value: <span className="text-emerald-400 font-bold">{val.proposed_intent_value}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Revalidation Results */}
+                  {revalidationSec?.status === 'SUCCEEDED' && revalidationSec?.data && (
+                    <div className="rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-5 space-y-4 shadow-xl">
+                      <div className="flex items-center justify-between border-b border-emerald-800/60 pb-3">
+                        <h4 className="text-sm font-bold text-emerald-300 flex items-center gap-2">
+                          <TrendingDown className="h-4 w-4 text-emerald-400" /> Remediation Revalidation Analysis
+                        </h4>
+                        <span className="font-mono text-xs font-bold text-emerald-400">
+                          {revalidationSec.data.exposure_eliminated_pct}% Exposure Eliminated
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs font-mono">
+                        <div className="rounded-lg border border-rose-900/60 bg-rose-950/30 p-3 space-y-1">
+                          <div className="text-rose-400 font-bold font-sans">BEFORE Remediation Exposure:</div>
+                          <div className="text-xl font-extrabold text-rose-300">${revalidationSec.data.before_absolute_exposure}</div>
+                          <div className="text-[11px] text-slate-400">{revalidationSec.data.before_affected_policies} affected policies</div>
+                        </div>
+
+                        <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 p-3 space-y-1">
+                          <div className="text-emerald-400 font-bold font-sans">AFTER Remediation Exposure:</div>
+                          <div className="text-xl font-extrabold text-emerald-300">${revalidationSec.data.after_absolute_exposure}</div>
+                          <div className="text-[11px] text-slate-400">{revalidationSec.data.after_affected_policies} affected policies</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400 font-mono">
+                  Status: {remediationSec?.status || 'NOT_RUN'} — {stageStatusLine('REMEDIATION', remediationSec)}
+                </div>
+              )
             )
           )}
 

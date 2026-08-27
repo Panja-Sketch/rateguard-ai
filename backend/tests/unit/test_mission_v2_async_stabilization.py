@@ -349,8 +349,9 @@ def test_firestore_serialization_round_trip():
     assert clean_res["blast_radius"]["status"] == "SUCCEEDED"
 
 
-def test_obsolete_scenario_lab_route_returns_410():
-    """Proves obsolete Scenario Lab API route is retired and returns HTTP 410 Gone."""
+def test_obsolete_scenario_lab_route_is_gone():
+    """The Scenario Lab route (superseded by Mission V2) has been removed
+    entirely, not merely stubbed -- see test_removed_legacy_endpoints_are_gone
+    in tests/api/test_assurance_api.py for the full removed-surface check."""
     res = client.post("/api/v1/assurance/scenario-lab", json={})
-    assert res.status_code == 410
-    assert "retired" in res.json()["detail"].lower()
+    assert res.status_code == 404

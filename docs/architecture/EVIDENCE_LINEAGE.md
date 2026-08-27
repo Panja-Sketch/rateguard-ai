@@ -1,7 +1,7 @@
 # Evidence Lineage & Firestore Persistence Specification
 
 ## 1. Overview & Purpose
-RateGuard AI records typed evidence lineage records throughout the multi-agent workflow to guarantee end-to-end auditability from raw rate filings to executive deployment decisions.
+RateGuard AI records typed evidence lineage records throughout the Mission V2 assurance pipeline to guarantee end-to-end auditability from raw rate filings to executive deployment decisions.
 
 ---
 

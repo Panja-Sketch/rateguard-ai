@@ -276,7 +276,9 @@ export default function NewMissionPage() {
                 <span className="text-xs text-slate-400 font-mono">AZ_HO3_2026_09</span>
               </div>
               <div className="text-sm font-bold text-white">Arizona HO3 Actuarial Spec</div>
-              <p className="text-xs text-slate-400">Authoritative Rate Filing Specification (2026.09)</p>
+              <p className="text-xs text-slate-400">
+                {isEquivalence ? 'Rate Filing Specification (2026.09) — an alignment reference, not presumed authoritative' : 'Authoritative Rate Filing Specification (2026.09)'}
+              </p>
             </div>
 
             {/* Source B Target Selection */}
@@ -286,7 +288,7 @@ export default function NewMissionPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs text-slate-400">Select Target Implementation Variant:</label>
+                <label className="text-xs text-slate-400">{isEquivalence ? 'Select Source B Variant:' : 'Select Target Implementation Variant:'}</label>
                 <div className="space-y-2">
                   <button
                     type="button"

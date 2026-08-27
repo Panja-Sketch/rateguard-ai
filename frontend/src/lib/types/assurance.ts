@@ -334,21 +334,3 @@ export interface WorkflowEvent {
   timestamp: string;
 }
 
-export interface AssuranceRunRecord {
-  run_id: string;
-  status: string;
-  workflow_stage: string;
-  left_package_id?: string;
-  right_package_id?: string;
-  decision?: string;
-  summary?: string;
-  created_at: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface AssuranceReport extends AssuranceResultV2 {
-  executive_summary?: string;
-  decision?: string;
-  semantic_differences?: SemanticDiffItem[];
-  portfolio_exposure?: PortfolioExposureResult;
-}

@@ -1,8 +1,6 @@
 import {
   AssuranceMissionDetail,
   AssuranceMissionSummary,
-  AssuranceReport,
-  AssuranceRunRecord,
   EvidenceRecord,
   SourceDescriptor,
   ValidationIssue,
@@ -191,6 +189,46 @@ export async function retryAssuranceMission(missionId: string): Promise<{
   return handleResponse(res);
 }
 
+export interface AlignmentOptionsResult {
+  mission_id: string;
+  reference: 'A' | 'B';
+  difference_count: number;
+  remediation: {
+    remediation_id: string;
+    title: string;
+    rationale: string;
+    derived_package_id: string;
+    proposed_changes: Record<string, any>;
+    source_evidence_ref: string;
+  };
+  revalidation: {
+    revalidation_id: string;
+    remediation_id: string;
+    before_absolute_exposure: string;
+    after_absolute_exposure: string;
+    before_affected_policies: number;
+    after_affected_policies: number;
+    exposure_eliminated_pct: number;
+  };
+}
+
+// Equivalence mode never generates a directional patch during the mission
+// run itself (neither Source A nor Source B is presumed authoritative) --
+// this computes one on demand, only after the caller has explicitly picked
+// which source to treat as the alignment reference.
+export async function generateAlignmentOptions(
+  missionId: string,
+  reference: 'A' | 'B'
+): Promise<AlignmentOptionsResult> {
+  const res = await fetch(`${BASE_URL}/api/v1/missions/${missionId}/alignment-options`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reference }),
+    cache: 'no-store',
+  });
+  return handleResponse(res);
+}
+
 export async function fetchSystemInfo(): Promise<{
   gemini_model: string;
   gemini_model_display: string;
@@ -204,75 +242,6 @@ export async function fetchSystemInfo(): Promise<{
   return handleResponse(res);
 }
 
-export async function fetchDemoScenarios(): Promise<{
-  scenarios: Array<{
-    id: string;
-    name: string;
-    description: string;
-    left_package_id: string;
-    right_package_id: string;
-    expected_decision: string;
-    tags: string[];
-    category: string;
-  }>;
-  count: number;
-}> {
-  const res = await fetch(`${BASE_URL}/api/v1/demo/scenarios`, { cache: 'no-store' });
-  return handleResponse(res);
-}
-
-export async function launchScenarioLabRun(params: {
-  name?: string;
-  roof_age_21_30_factor?: number | null;
-  deductible_1000_factor?: number | null;
-  territory_t05_factor?: number | null;
-  claims_free_discount_pct?: number | null;
-  claims_free_effective_date?: string | null;
-  minimum_premium?: number | null;
-  policy_fee?: number | null;
-  async_execution?: boolean;
-}): Promise<{
-  run_id: string;
-  status: string;
-  lab_package_id?: string;
-  parameter_changes?: Record<string, unknown>;
-}> {
-  const res = await fetch(`${BASE_URL}/api/v1/assurance/scenario-lab`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-    cache: 'no-store',
-  });
-  return handleResponse(res);
-}
-
-export async function listAssuranceRuns(limit: number = 50): Promise<{
-  runs: Array<{
-    run_id: string;
-    created_at: string;
-    updated_at: string;
-    status: string;
-    workflow_stage?: string;
-    left_package_id?: string;
-    right_package_id?: string;
-    decision?: string;
-    summary?: string;
-  }>;
-  count: number;
-}> {
-  const res = await fetch(`${BASE_URL}/api/v1/assurance/runs?limit=${limit}`, {
-    cache: 'no-store',
-  });
-  return handleResponse(res);
-}
-
-export async function getAssuranceRun(runId: string): Promise<AssuranceRunRecord> {
-  const res = await fetch(`${BASE_URL}/api/v1/assurance/runs/${runId}`, {
-    cache: 'no-store',
-  });
-  return handleResponse<AssuranceRunRecord>(res);
-}
-
 export async function getAssuranceRunEvents(runId: string): Promise<{
   run_id: string;
   event_count: number;
@@ -282,13 +251,6 @@ export async function getAssuranceRunEvents(runId: string): Promise<{
     cache: 'no-store',
   });
   return handleResponse<{ run_id: string; event_count: number; events: WorkflowEvent[] }>(res);
-}
-
-export async function getAssuranceRunResult(runId: string): Promise<AssuranceReport> {
-  const res = await fetch(`${BASE_URL}/api/v1/assurance/runs/${runId}/result`, {
-    cache: 'no-store',
-  });
-  return handleResponse<AssuranceReport>(res);
 }
 
 export async function getAssuranceRunEvidence(runId: string): Promise<{

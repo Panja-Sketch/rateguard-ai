@@ -449,6 +449,105 @@ def get_mission_gemini_evidence(mission_id: str) -> dict[str, Any]:
     }
 
 
+class AlignmentOptionsRequest(BaseModel):
+    """Which source the caller wants treated as the alignment reference."""
+
+    reference: str = Field(..., pattern="^[AB]$")
+
+
+@router.post("/missions/{mission_id}/alignment-options")
+def generate_alignment_options(mission_id: str, payload: AlignmentOptionsRequest) -> dict[str, Any]:
+    """On-demand, symmetric directional patch generation for Equivalence-mode
+    missions only.
+
+    Equivalence mode assumes neither Source A nor Source B is authoritative,
+    so `AssuranceSupervisor.run_mission` deliberately never computes a
+    directional patch during the mission run itself -- see the
+    PROPOSE_ALIGNMENT_OPTIONS decision point. This endpoint computes one on
+    demand, only after a human has explicitly picked which source to treat
+    as the reference, using the exact same deterministic diff/remediation/
+    revalidation engines the eager Release Conformance path uses. Nothing
+    here calls Gemini; the reference choice and every number in the response
+    are purely deterministic given the two already-compiled sources.
+    """
+    from app.engines.diff import SemanticDiffEngine
+    from app.services.finding_conversion import to_material_findings
+    from app.services.mission_execution_service import _resolve_source_package
+    from app.services.remediation_service import RemediationService
+
+    store = get_run_store()
+    record = store.get_run(mission_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assurance mission '{mission_id}' not found.",
+        )
+
+    status_str = record.status.value if hasattr(record.status, "value") else str(record.status)
+    if status_str not in ("COMPLETED", "NEEDS_REVIEW", "ARCHIVED"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Mission '{mission_id}' is in status '{status_str}'; alignment options require a finished mission.",
+        )
+
+    meta = record.metadata if isinstance(record.metadata, dict) else {}
+    mission_dict = meta.get("mission_object")
+    if not mission_dict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Mission envelope unavailable; cannot re-resolve sources for alignment options.",
+        )
+    mission = AssuranceMission.model_validate(mission_dict)
+
+    if mission.mode != ComparisonMode.EQUIVALENCE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Alignment options are only available for Equivalence-mode missions. "
+            "Release Conformance always treats Source A as the authoritative filing intent.",
+        )
+    if not mission.source_b:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mission has no Source B to align against.",
+        )
+
+    try:
+        left_pkg = _resolve_source_package(mission.source_a)
+        right_pkg = _resolve_source_package(mission.source_b)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Could not re-resolve the compiled sources for this mission: {exc}",
+        ) from exc
+
+    if payload.reference == "A":
+        intent_pkg, target_pkg = left_pkg, right_pkg
+    else:
+        intent_pkg, target_pkg = right_pkg, left_pkg
+
+    diff_result = SemanticDiffEngine().compare_packages(intent_pkg, target_pkg)
+    findings = to_material_findings(diff_result)
+    if not findings:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No differences found relative to the selected reference; there is nothing to align.",
+        )
+
+    rem_service = RemediationService()
+    proposal = rem_service.generate_remediation_proposal(intent_pkg, target_pkg, findings)
+    revalidation = rem_service.revalidate_remediation(
+        intent_pkg, target_pkg, proposal, mission.objective.portfolio_dataset,
+    )
+
+    return {
+        "mission_id": mission_id,
+        "reference": payload.reference,
+        "difference_count": len(findings),
+        "remediation": proposal.model_dump(mode="json"),
+        "revalidation": revalidation.model_dump(mode="json"),
+    }
+
+
 @router.post("/missions/{mission_id}/cancel")
 def cancel_assurance_mission(mission_id: str) -> dict[str, Any]:
     """Cancels a mission. QUEUED/VALIDATING/WAITING_RETRY/DRAFT transition directly to

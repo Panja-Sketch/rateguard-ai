@@ -5,53 +5,34 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.messaging import AssuranceJob
 from app.messaging.outcomes import ProcessingOutcome
+from app.models.mission import AssuranceMission, ComparisonMode, MissionObjective, PricingSourceRef
+from app.storage import AssuranceRunRecord, AssuranceRunStatus, get_run_store
 
 client = TestClient(app)
 
 
-def test_async_assurance_run_creation():
-    """Tests POST /api/v1/assurance/runs returning 202 Accepted in async mode."""
-    payload = {
-        "left_package_id": "AZ_HO3_2026_09",
-        "right_package_id": "AZ_HO3_2026_09_DEFECTIVE",
-        "async_execution": True,
-        "include_portfolio_analysis": False,
-    }
-
-    res = client.post("/api/v1/assurance/runs", json=payload)
-    assert res.status_code == 202
-
-    data = res.json()
-    assert "run_id" in data
-    assert data["status"] == "QUEUED"
-    assert "job_id" in data
-
-    run_id = data["run_id"]
-
-    # Verify status endpoint
-    res_status = client.get(f"/api/v1/assurance/runs/{run_id}")
-    assert res_status.status_code == 200
-    assert res_status.json()["status"] == "QUEUED"
-
-    # Verify events endpoint
-    res_events = client.get(f"/api/v1/assurance/runs/{run_id}/events")
-    assert res_events.status_code == 200
-    assert res_events.json()["event_count"] >= 1
-
-    # Verify result endpoint returns 202 while QUEUED
-    res_result = client.get(f"/api/v1/assurance/runs/{run_id}/result")
-    assert res_result.status_code == 202
-    assert res_result.json()["status"] == "QUEUED"
-
-
 def test_internal_pubsub_worker_endpoint():
-    """Tests POST /internal/pubsub/assurance decoding Pub/Sub push message."""
+    """Tests POST /internal/pubsub/assurance decoding a real Pub/Sub push
+    message end to end for a genuine Mission V2 'MIS-*' job."""
+    mission = AssuranceMission(
+        mission_id="MIS-PUBSUB-ENDPOINT-TEST",
+        name="Pub/Sub Endpoint Test",
+        mode=ComparisonMode.RELEASE_CONFORMANCE,
+        objective=MissionObjective(product="AZ_HO3", jurisdiction="Arizona", effective_period_start="2026-09-01"),
+        source_a=PricingSourceRef(source_id="AZ_HO3_2026_09", source_type="SAMPLE_RELEASE", name="Intent"),
+        source_b=PricingSourceRef(source_id="AZ_HO3_2026_09_DEFECTIVE", source_type="SAMPLE_RELEASE", name="Target"),
+    )
+    store = get_run_store()
+    store.create_run(AssuranceRunRecord(
+        run_id="MIS-PUBSUB-ENDPOINT-TEST",
+        status=AssuranceRunStatus.QUEUED,
+        metadata={"mission_object": mission.model_dump(mode="json")},
+    ))
+
     job = AssuranceJob(
         job_id="JOB-TEST-001",
-        run_id="RUN-TEST-001",
-        left_package_id="AZ_HO3_2026_09",
-        right_package_id="AZ_HO3_2026_09_DEFECTIVE",
-        include_portfolio_analysis=False,
+        run_id="MIS-PUBSUB-ENDPOINT-TEST",
+        job_type="ASSURANCE_MISSION_V2",
     )
 
     encoded_data = base64.b64encode(job.model_dump_json().encode("utf-8")).decode("utf-8")
@@ -73,16 +54,4 @@ def test_internal_pubsub_worker_endpoint():
         ProcessingOutcome.DUPLICATE_ALREADY_PROCESSED.value,
     )
     assert data["job_id"] == "JOB-TEST-001"
-    assert data["run_id"] == "RUN-TEST-001"
-
-
-def test_unknown_assurance_run_404():
-    """Verifies 404 response for unknown run ID."""
-    res = client.get("/api/v1/assurance/runs/RUN-NONEXISTENT")
-    assert res.status_code == 404
-
-    res_events = client.get("/api/v1/assurance/runs/RUN-NONEXISTENT/events")
-    assert res_events.status_code == 404
-
-    res_result = client.get("/api/v1/assurance/runs/RUN-NONEXISTENT/result")
-    assert res_result.status_code == 404
+    assert data["run_id"] == "MIS-PUBSUB-ENDPOINT-TEST"

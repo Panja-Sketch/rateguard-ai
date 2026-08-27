@@ -26,7 +26,9 @@ export function SemanticDiffViewer({ diffs, isCompleted = true, neutralLabels = 
         </h4>
         <p className="text-xs text-slate-300 max-w-md mx-auto">
           {isCompleted
-            ? 'Deterministic IPIR 0.1 AST comparison verified full equivalence between pricing intent and target implementation.'
+            ? neutralLabels
+              ? 'Deterministic IPIR 0.1 AST comparison verified full equivalence between Source A and Source B.'
+              : 'Deterministic IPIR 0.1 AST comparison verified full equivalence between pricing intent and target implementation.'
             : 'Semantic assurance agent will compare pricing representation ASTs once compiled.'}
         </p>
       </div>

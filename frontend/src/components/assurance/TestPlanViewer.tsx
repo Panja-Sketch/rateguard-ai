@@ -66,6 +66,19 @@ export function TestPlanViewer({
       ? Math.round(((candidateCount - selectedCount) / candidateCount) * 100)
       : ((testPlan as any)?.reduction_pct ?? 0);
 
+  // Each executed probe carries its own category (RISK_DIRECTED for the
+  // initial selection, ADDITIONAL_PROBE for a later bounded round Gemini
+  // requested once it saw a mismatch) -- surfacing that split directly,
+  // instead of only a single before/after candidate count, is what makes
+  // "why does the final executed count not match the reduction math" legible
+  // instead of looking like an inconsistency.
+  const initiallySelectedCount = rawScenarios.filter((s: any) => (s.category || 'RISK_DIRECTED') !== 'ADDITIONAL_PROBE').length;
+  const additionalProbeCount = rawScenarios.length - initiallySelectedCount;
+  const initialReductionPct =
+    candidateCount > 0 && candidateCount >= initiallySelectedCount
+      ? Math.round(((candidateCount - initiallySelectedCount) / candidateCount) * 100)
+      : reductionPct;
+
   if (!rawScenarios || rawScenarios.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
@@ -94,7 +107,9 @@ export function TestPlanViewer({
             Risk-Directed Test Plan ({rawScenarios.length} Scenarios)
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Optimized from {candidateCount} candidate scenarios ({reductionPct}% reduction via AST boundary analysis)
+            {additionalProbeCount > 0
+              ? `${initiallySelectedCount} of ${candidateCount} initially selected (${initialReductionPct}% reduction); ${additionalProbeCount} additional evidence probe${additionalProbeCount === 1 ? '' : 's'} requested; ${rawScenarios.length} ultimately executed`
+              : `Optimized from ${candidateCount} candidate scenarios (${reductionPct}% reduction via AST boundary analysis)`}
           </p>
         </div>
 

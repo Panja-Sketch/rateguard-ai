@@ -11,9 +11,9 @@ RateGuard AI stores source files, compiled IPIR packages, test suites, execution
 ```
 gcs://rateguard-ai-artifacts/  (or local RATEGUARD_ARTIFACT_DIR)
 ├── sources/
-│   ├── json/       # Raw uploaded actuarial JSON specs
-│   ├── workbooks/  # Raw uploaded Excel (.xlsx) workbooks
-│   └── documents/  # Raw uploaded PDF (.pdf) filings
+│   └── json/       # Raw uploaded actuarial JSON specs (the only format
+│                   # accepted today -- .xlsx/.pdf uploads are rejected
+│                   # before reaching storage, see SOURCE_ADAPTERS.md)
 ├── ipir/           # Compiled IPIR packages
 ├── portfolios/     # Synthetic 50k policy CSV files
 └── evidence/       # Assurance run evidence records & logs

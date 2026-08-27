@@ -262,7 +262,13 @@ export default function MissionsHistoryPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
-            {missions.length === 0 && error ? (
+            {loading && missions.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-sans">
+                  Loading mission history…
+                </td>
+              </tr>
+            ) : missions.length === 0 && error ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-sans">
                   Mission history is unavailable right now — see the error above. This is not necessarily an empty history.

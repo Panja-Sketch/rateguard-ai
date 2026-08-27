@@ -50,9 +50,9 @@ export default function HomePage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-950 text-sky-400 border border-sky-800">
             <FileCode2 className="h-5 w-5" />
           </div>
-          <h3 className="text-base font-bold text-white">Source-Agnostic & Vendor-Neutral</h3>
+          <h3 className="text-base font-bold text-white">Vendor-Neutral Intermediate Representation</h3>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Compiles actuarial Excel specs, regulatory PDFs, JSON files, and rating engine configs into an Intermediate Pricing Implementation Representation (IPIR).
+            Compiles supported native IPIR and structured rating-config JSON sources into a canonical Intermediate Pricing Implementation Representation (IPIR) for symmetric comparison. Excel and PDF extraction is planned, not yet supported.
           </p>
         </div>
 

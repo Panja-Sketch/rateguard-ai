@@ -271,6 +271,11 @@ export default function SourcesPage() {
             <Download className="h-3.5 w-3.5" /> Download one-factor drift pair
           </a>
         </div>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Upload Template A as Source A and Template B as Source B. Expected: one roof-age factor difference
+          and a <span className="text-rose-300 font-bold">BLOCK_DEPLOYMENT</span> decision. Upload Template A as
+          both Source A and Source B instead to see a clean <span className="text-emerald-300 font-bold">PASS</span> with zero differences.
+        </p>
         <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400 space-y-1.5">
           <div className="flex items-center gap-1.5 font-bold text-slate-300 font-sans">
             <Info className="h-3.5 w-3.5 text-sky-400" /> What this file must contain
@@ -303,7 +308,7 @@ export default function SourcesPage() {
           <form onSubmit={handleUploadA} className="space-y-3">
             <input
               type="file"
-              accept=".json"
+              accept=".json,application/json"
               onChange={(e) => setFileA(e.target.files?.[0] || null)}
               className="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-sky-950 file:text-sky-300 border border-slate-800 rounded-lg p-2 bg-slate-950"
             />
@@ -333,7 +338,7 @@ export default function SourcesPage() {
           <form onSubmit={handleUploadB} className="space-y-3">
             <input
               type="file"
-              accept=".json"
+              accept=".json,application/json"
               onChange={(e) => setFileB(e.target.files?.[0] || null)}
               className="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-purple-950 file:text-purple-300 border border-slate-800 rounded-lg p-2 bg-slate-950"
             />

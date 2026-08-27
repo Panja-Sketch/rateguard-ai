@@ -469,6 +469,54 @@ def check_missing_sources_no_arizona_fallback(report: Report, api_url: str) -> N
     )
 
 
+_SAMPLE_TEMPLATE_PATHS = (
+    "/samples/rateguard-source-template-a.json",
+    "/samples/rateguard-source-template-b-drift.json",
+)
+
+
+def check_sample_templates_served(report: Report, frontend_url: str) -> None:
+    """Verifies the two sample IPIR templates the Sources page advertises for
+    download are actually served by the deployed web app: HTTP 200, a JSON
+    content type, valid JSON, and a schema-shaped body (the exact top-level
+    fields IPIRPackage requires). A regression here previously meant these
+    links 404'd in production because the frontend Docker image's runner
+    stage never copied Next.js's `public/` directory."""
+    required_fields = {"ipir_version", "id", "name", "product", "effective_period", "inputs", "tables", "calculations", "outputs"}
+
+    for path in _SAMPLE_TEMPLATE_PATHS:
+        url = f"{frontend_url.rstrip('/')}{path}"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=15.0) as resp:
+                status_code = resp.status
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            status_code = e.code
+            content_type = e.headers.get("Content-Type", "") if e.headers else ""
+            raw = e.read()
+
+        ok = status_code == 200 and "json" in content_type.lower()
+        detail = f"{path}: HTTP {status_code}, Content-Type={content_type!r}"
+
+        if ok:
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                ok = False
+                detail += f", INVALID JSON: {exc}"
+            else:
+                missing = required_fields - set(parsed.keys())
+                if missing:
+                    ok = False
+                    detail += f", missing required IPIR fields: {sorted(missing)}"
+                else:
+                    detail += f", valid JSON with {len(parsed.keys())} top-level fields"
+
+        report.add(f"sample_template_served[{path}]", ok, detail)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--yes-test-candidate", action="store_true", help="Required explicit opt-in.")
@@ -491,12 +539,18 @@ def main(argv: list[str] | None = None) -> int:
     check_system_status(report, args.api_url)
     if args.frontend_url:
         check_cors_from_candidate_web_origin(report, args.api_url, args.frontend_url)
+        check_sample_templates_served(report, args.frontend_url)
     else:
         report.add(
             "cors_allows_candidate_web_origin", False,
             "Skipped: --frontend-url was not provided, so the candidate web origin's CORS "
             "access could not be verified (health/mission checks below use a plain HTTP "
             "client and never send an Origin header, so they cannot catch this).",
+        )
+        report.add(
+            "sample_template_served", False,
+            "Skipped: --frontend-url was not provided, so the Sources page's downloadable "
+            "sample templates could not be verified.",
         )
 
     mission_id = create_demo_mission(report, args.api_url)
