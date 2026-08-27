@@ -21,7 +21,18 @@ def matches_predicate(policy: SyntheticPolicy, predicate: ImpactPredicate) -> bo
         target_val = clause.value
         op = clause.operator
 
-        if isinstance(val, (int, Decimal)) and isinstance(target_val, (int, Decimal)):
+        # `bool` is a subclass of `int` in Python -- without this explicit
+        # exclusion, a boolean clause (e.g. a modifier eligibility predicate
+        # on `multi_policy == True`) falls into the numeric branch below and
+        # `Decimal(str(True))` raises InvalidOperation. Booleans always take
+        # the string-equality branch instead, which already compares them
+        # correctly (str(True) == 'True' on both sides).
+        if (
+            isinstance(val, (int, Decimal))
+            and not isinstance(val, bool)
+            and isinstance(target_val, (int, Decimal))
+            and not isinstance(target_val, bool)
+        ):
             val_dec = Decimal(str(val))
             target_dec = Decimal(str(target_val))
 

@@ -89,17 +89,32 @@ def test_03_full_50k_portfolio_authoritative_baseline() -> None:
     analyzer = PortfolioAnalyzer()
     res = analyzer.analyze(policies, canonical, defective)
 
-    # Authoritative 50,000 policy exposure metrics
+    # Authoritative 50,000 policy exposure metrics.
+    #
+    # These were recomputed after fixing app.engines.impact.predicates:
+    # derive_predicate_from_difference previously returned None (silently
+    # dropping the diff from blast-radius scope) for any difference type
+    # other than EFFECTIVE_DATE_CHANGE and TABLE_ROW_*. AZ_HO3_2026_09_
+    # DEFECTIVE's third defect (DEFECT_PREMIUM_SEQUENCE_DRIFT, see
+    # data/implementations/defective/DEFECT_MANIFEST.json) is an ORDER_CHANGE
+    # on a constraint and a fee -- a type that fell through that gap and
+    # never reached the portfolio scan at all. It has no risk-based
+    # eligibility of its own (constraints/fees carry none in the IPIR
+    # schema), so it now correctly produces a global predicate matching
+    # every policy, which is why exposed/behaviorally_affected/multi_defect
+    # jump to the full 50,000 while financially_affected only grows by the
+    # policies where the swapped fee/floor order actually changes the final
+    # premium (whether the minimum-premium floor binds for that policy).
     assert res.total_policies == 50000
-    assert res.exposed_policy_count == 14607
-    assert res.behaviorally_affected_count == 14607
-    assert res.financially_affected_count == 13294
-    assert res.multi_defect_policy_count == 1246
-    assert res.total_expected_premium == Decimal("13589617.67")
-    assert res.total_target_premium == Decimal("13000875.25")
-    assert res.total_signed_variance == Decimal("-588742.42")
-    assert res.total_absolute_variance == Decimal("868974.18")
-    assert res.undercharged_count == 10247
-    assert res.total_undercharge == Decimal("728858.30")
+    assert res.exposed_policy_count == 50000
+    assert res.behaviorally_affected_count == 50000
+    assert res.financially_affected_count == 16845
+    assert res.multi_defect_policy_count == 50000
+    assert res.total_expected_premium == Decimal("15720217.67")
+    assert res.total_target_premium == Decimal("15053544.62")
+    assert res.total_signed_variance == Decimal("-666673.05")
+    assert res.total_absolute_variance == Decimal("946904.81")
+    assert res.undercharged_count == 13798
+    assert res.total_undercharge == Decimal("806788.93")
     assert res.overcharged_count == 3047
     assert res.total_overcharge == Decimal("140115.88")

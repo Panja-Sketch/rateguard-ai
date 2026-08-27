@@ -1308,9 +1308,14 @@ class AssuranceSupervisor:
                 # and regression (control) scenario ids to rerun deterministically
                 # against the patched candidate before revalidation.
                 targeted_ids: list[str] = [e.experiment_id for e in experiments_list if not e.matches]
+                # A scenario that is itself the targeted (mismatched) witness
+                # can also be classified CONTROL (e.g. the one-and-only
+                # scenario a still-sparse candidate pool produced) -- excluding
+                # it here guarantees "regression" always means a genuinely
+                # different scenario, never the same id serving double duty.
                 control_ids = [
                     sc.id for sc in (test_plan.candidate_scenarios if test_plan is not None else [])
-                    if sc.classification == ScenarioClassification.CONTROL
+                    if sc.classification == ScenarioClassification.CONTROL and sc.id not in targeted_ids
                 ]
                 regression_ids: list[str] = control_ids[:MAX_REGRESSION_TESTS]
 

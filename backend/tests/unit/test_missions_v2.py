@@ -1,10 +1,12 @@
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from app.agents.supervisor import AssuranceSupervisor
 from app.api.assurance import resolve_demo_package
 from app.engines.oracle.calculator import CalcResult, PremiumOracleCalculator
 from app.ipir.enums import InsuranceLine
+from app.ipir.package import IPIRPackage
 from app.models.mission import (
     AssuranceMission,
     ComparisonMode,
@@ -14,6 +16,11 @@ from app.models.mission import (
 from app.services.remediation_service import RemediationService
 from app.services.validation_service import MissionValidationService
 from app.storage.memory_store import InMemoryRunStore
+
+
+def _load_fixture(name: str) -> IPIRPackage:
+    path = Path(__file__).resolve().parent.parent / "fixtures" / name
+    return IPIRPackage.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def test_mission_validation_rules():
@@ -189,4 +196,52 @@ def test_remediation_service_derived_package():
     reval = rem_service.revalidate_remediation(intent, defective, proposal)
     assert reval.new_release_decision == "PASS"
     assert reval.exposure_eliminated_pct == 100.0
+
+
+def test_mission_with_fee_modifier_and_exact_table_diffs_reports_full_blast_radius():
+    """End-to-end regression test for a real judge-reported gap: a mission
+    with a $5,000-deductible-tier factor drift, a multi-policy discount
+    percentage change, and a global policy fee change used to report only
+    ~5% portfolio exposure (the fee/modifier diffs produced no risk
+    predicate at all, see app.engines.impact.predicates) and a single
+    boundary-test scenario for three independent differences. Both are
+    fixed; this locks in the corrected behavior end to end."""
+    control = _load_fixture("multi_risk_control_a.json")
+    drift = _load_fixture("multi_risk_drift_b.json")
+
+    supervisor = AssuranceSupervisor(InMemoryRunStore())
+    mission = AssuranceMission(
+        mission_id="MIS-MULTIRISK-01",
+        name="Multi-Risk Drift Regression",
+        mode=ComparisonMode.RELEASE_CONFORMANCE,
+        objective=MissionObjective(product="AZ_HO3", jurisdiction="AZ", effective_period_start="2026-09-01"),
+        source_a=PricingSourceRef(source_id="multi-risk-a", source_type="FILE", name="A"),
+        source_b=PricingSourceRef(source_id="multi-risk-b", source_type="FILE", name="B"),
+    )
+
+    res = supervisor.run_mission(mission, control, drift)
+
+    assert res.release_decision.data.status == "BLOCK_DEPLOYMENT"
+    assert res.semantic_analysis.data.difference_count == 3
+
+    # The global fee change means every one of the 50,000 synthetic policies
+    # is exposed, not just the ~5% share that hits the $5,000 deductible tier.
+    br = res.blast_radius.data
+    assert br.total_policies_analyzed == 50000
+    assert br.semantically_exposed_count == 50000
+    assert br.multi_defect_policy_count > 0
+
+    # More than one boundary-test scenario for three independent diffs, with
+    # at least one SINGLE_DEFECT witness and the combined MULTI_DEFECT case.
+    experiments = res.experiments.data.experiments
+    assert len(experiments) > 1
+
+    # Remediation rationale names the actual diff kinds, not a fixed
+    # "effective start dates and sequence ordering" sentence.
+    rationale = res.remediation.data.rationale
+    assert "rate table factor drift" in rationale
+    assert "modifier value change" in rationale
+    assert "fee amount change" in rationale
+    assert "effective start date" not in rationale
+    assert "sequence ordering" not in rationale
 

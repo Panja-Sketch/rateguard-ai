@@ -47,10 +47,8 @@ class ImpactAnalyzer:
                 paths = graph.get_paths(node_id, out_id)
                 dependency_paths.extend(paths)
 
-            # Derive risk predicates
-            pred = derive_predicate_from_difference(diff, package)
-            if pred:
-                candidate_predicates.append(pred)
+            # Derive risk predicates -- always returns one, see its docstring.
+            candidate_predicates.append(derive_predicate_from_difference(diff, package))
 
         directly_affected: set[str] = set()
         for cnode in changed_nodes:

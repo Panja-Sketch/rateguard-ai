@@ -7,7 +7,7 @@ from app.engines.diff.models import SemanticDiffResult
 from app.engines.impact.models import ImpactAnalysis
 from app.engines.testing.boundary_generator import generate_range_boundary_values
 from app.engines.testing.models import PricingTestScenario, ScenarioClassification
-from app.ipir.enums import InputDataType
+from app.ipir.enums import ComparisonOperator, InputDataType
 from app.ipir.package import IPIRPackage
 
 
@@ -153,6 +153,94 @@ def generate_candidate_scenarios(
                         ),
                     )
                 )
+
+    # 2b. Isolated Single-Defect Witness Scenarios (EXACT-match / global
+    # predicates -- range predicates already get boundary coverage above).
+    # A predicate with no clauses at all (a flat fee or premium constraint
+    # change with no risk-based eligibility, see
+    # app.engines.impact.predicates._global_predicate) has nothing to set --
+    # the baseline control scenario is already its witness, so it only needs
+    # to be tagged to that diff, not a whole new scenario.
+    #
+    # Every EXACT/EQ-clause predicate not already covered by a range
+    # boundary gets exactly one isolated scenario: its own clause fields set
+    # to the matching value, every other field left at base_risk's default.
+    # Those defaults (first allowed_value, False, or a range midpoint) are
+    # deliberately generic/neutral, so in practice this scenario does not
+    # also happen to satisfy a different predicate -- true isolation is not
+    # guaranteed against arbitrary inputs, but is the common, expected case.
+    exact_predicates = [
+        pred for pred in impact.candidate_risk_predicates
+        if pred.clauses and all(c.operator == ComparisonOperator.EQ for c in pred.clauses)
+    ]
+    combined_overrides: dict[str, Any] = {}
+
+    for pred in exact_predicates:
+        risk = dict(base_risk)
+        for clause in pred.clauses:
+            risk[clause.field] = clause.value
+            combined_overrides[clause.field] = clause.value
+
+        target_diff_ids = [d.id for d in diff_result.differences if f"pred_{d.id}" == pred.id]
+        target_nodes = [d.node_id for d in diff_result.differences if f"pred_{d.id}" == pred.id]
+        field_summary = ", ".join(f"{c.field}={c.value}" for c in pred.clauses)
+
+        candidates.append(
+            PricingTestScenario(
+                id=f"RG_CAND_{counter:03d}",
+                name=f"Isolated Single-Defect Scenario ({field_summary})",
+                risk_values=risk,
+                effective_date=pkg_start + timedelta(days=20),
+                classification=ScenarioClassification.SINGLE_DEFECT,
+                target_difference_ids=target_diff_ids,
+                target_node_ids=target_nodes,
+                tags=["SINGLE_DEFECT"],
+                purpose=f"Isolate the effect of {field_summary} without any other material difference active.",
+            )
+        )
+        counter += 1
+
+    # Every no-clause (global) predicate is already witnessed by the
+    # Baseline Control Scenario -- tag it there too so revalidation/coverage
+    # reporting can see the diff was exercised, without a duplicate scenario.
+    global_diff_ids = [
+        d.id
+        for d in diff_result.differences
+        for pred in impact.candidate_risk_predicates
+        if pred.id == f"pred_{d.id}" and not pred.clauses and pred.temporal_start is None
+    ]
+    if global_diff_ids:
+        candidates[0].target_difference_ids = sorted(set(candidates[0].target_difference_ids) | set(global_diff_ids))
+
+    # 2c. Combined Multi-Defect Scenario -- one policy satisfying every
+    # EXACT/EQ-clause predicate at once, so an overlap between (for example)
+    # a deductible-tier defect and a multi-policy-eligibility defect is
+    # actually exercised and counted, not just asserted possible.
+    if len(exact_predicates) > 1:
+        combined_risk = dict(base_risk)
+        combined_risk.update(combined_overrides)
+        all_target_diff_ids = [
+            d.id for d in diff_result.differences
+            if any(f"pred_{d.id}" == pred.id for pred in exact_predicates)
+        ]
+        all_target_nodes = [
+            d.node_id for d in diff_result.differences
+            if any(f"pred_{d.id}" == pred.id for pred in exact_predicates)
+        ]
+        candidates.append(
+            PricingTestScenario(
+                id=f"RG_CAND_{counter:03d}",
+                name="Combined Multi-Defect Scenario",
+                risk_values=combined_risk,
+                effective_date=pkg_start + timedelta(days=20),
+                classification=ScenarioClassification.MULTI_DEFECT,
+                target_difference_ids=all_target_diff_ids,
+                target_node_ids=all_target_nodes,
+                tags=["MULTI_DEFECT"],
+                purpose="Verify behavior for a policy where multiple material differences overlap simultaneously.",
+            )
+        )
+        counter += 1
 
     # 3. Temporal Effective Date Shift Scenarios
     date_diffs = [

@@ -15,6 +15,56 @@ from app.models.mission import (
 )
 
 
+# Friendly labels keyed by the DifferenceType prefix that
+# app.services.finding_conversion.to_material_findings always puts before
+# ": " in a MaterialFinding's title. MaterialFinding itself has no
+# difference_type field to read directly (see app.models.mission), so the
+# title prefix is the one reliable, already-guaranteed-present source.
+_DIFF_TYPE_LABELS: dict[str, str] = {
+    "VALUE_CHANGE": "constant value change",
+    "RANGE_CHANGE": "range boundary change",
+    "RULE_CHANGE": "rule change",
+    "ORDER_CHANGE": "sequence order change",
+    "EFFECTIVE_DATE_CHANGE": "effective date change",
+    "ROUNDING_CHANGE": "rounding rule change",
+    "MISSING_NODE": "missing node",
+    "EXTRA_NODE": "extra node",
+    "TABLE_ROW_CHANGE": "rate table factor drift",
+    "TABLE_ROW_MISSING": "missing rate table row",
+    "TABLE_ROW_EXTRA": "extra rate table row",
+    "TABLE_COVERAGE_GAP": "rate table coverage gap",
+    "OUTPUT_CHANGE": "output definition change",
+    "MODIFIER_CHANGE": "modifier value change",
+    "CONSTRAINT_CHANGE": "constraint change",
+    "FEE_CHANGE": "fee amount change",
+}
+
+
+def _summarize_finding_categories(differences: list[MaterialFinding]) -> str:
+    """Builds a rationale sentence naming the actual kinds of differences being
+    corrected, instead of a fixed sentence that names categories regardless of
+    what the mission's own findings actually are (a remediation summary that
+    talks about "effective start dates and sequence ordering" for a mission
+    that only changed a fee amount and a modifier percentage is exactly the
+    kind of unverified claim this tool exists to catch elsewhere)."""
+    counts: dict[str, int] = {}
+    for diff in differences:
+        prefix = diff.title.split(":", 1)[0].strip()
+        label = _DIFF_TYPE_LABELS.get(prefix, prefix.replace("_", " ").lower() or "difference")
+        counts[label] = counts.get(label, 0) + 1
+
+    parts = [f"{n} {label}{'s' if n != 1 else ''}" for label, n in counts.items()]
+    if not parts:
+        return "Corrects the confirmed findings for this mission."
+    if len(parts) == 1:
+        joined = parts[0]
+    elif len(parts) == 2:
+        joined = f"{parts[0]} and {parts[1]}"
+    else:
+        joined = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+    return f"Corrects {joined}."
+
+
 class RemediationService:
     """Service handling isolated remediation patch generation and revalidation testing."""
 
@@ -45,7 +95,7 @@ class RemediationService:
         return RemediationProposal(
             remediation_id=rem_id,
             title=f"Proposed Rating Engine Patch ({len(differences)} Fixes)",
-            rationale="Corrects identified rate table factor drifts, effective start dates, and sequence ordering.",
+            rationale=_summarize_finding_categories(differences),
             derived_package_id=derived_id,
             proposed_changes=proposed_changes,
             source_evidence_ref="EV-SEMANTIC-DIFF",

@@ -4,15 +4,64 @@ from decimal import Decimal
 from app.engines.diff.enums import DifferenceType
 from app.engines.diff.models import SemanticDifference
 from app.engines.impact.models import ImpactPredicate, PredicateClause
+from app.ipir.common import LiteralValue, NodeReference
 from app.ipir.enums import ComparisonOperator, LogicalOperator
 from app.ipir.package import IPIRPackage
+from app.ipir.rules import ComparisonCondition
 from app.ipir.tables import RangeMatch, TableLookupType
+
+# A predicate with no clauses and no temporal window matches every policy
+# (see app.engines.portfolio.predicate_evaluator.matches_predicate) -- this
+# is the correct, honest representation for a change with no risk-based
+# eligibility of its own (a flat fee, a premium constraint, or any diff type
+# this module doesn't yet know how to translate into specific clauses).
+# Silently returning None here instead would mean the portfolio blast-radius
+# scan and boundary-test generator never learn the change exists at all --
+# an undercounted "financially affected" number is a false PASS in miniature.
+def _global_predicate(diff: SemanticDifference) -> ImpactPredicate:
+    return ImpactPredicate(
+        id=f"pred_{diff.id}",
+        clauses=[],
+        logical_operator=LogicalOperator.AND,
+        description=(
+            f"'{diff.node_id}' change with no risk-based eligibility of its own -- "
+            "applies to every policy that reaches the affected calculation node."
+        ),
+    )
+
+
+def _predicate_from_eligibility(
+    diff: SemanticDifference, eligibility: ComparisonCondition
+) -> ImpactPredicate | None:
+    """Translates a modifier's simple `left ref/right literal` (or reversed)
+    eligibility condition into a single-clause predicate. Anything more
+    complex (a LogicalCondition, both sides literals/expressions, or a
+    non-EQ/NE comparison against a non-input reference) falls back to the
+    caller's global predicate instead of guessing -- a predicate that
+    matches too broadly is safe (it only costs extra repricing work); one
+    that matches too narrowly silently hides real exposure."""
+    if isinstance(eligibility.left, NodeReference) and isinstance(eligibility.right, LiteralValue):
+        field, literal = eligibility.left.ref, eligibility.right.value
+    elif isinstance(eligibility.right, NodeReference) and isinstance(eligibility.left, LiteralValue):
+        field, literal = eligibility.right.ref, eligibility.left.value
+    else:
+        return None
+
+    return ImpactPredicate(
+        id=f"pred_{diff.id}",
+        clauses=[PredicateClause(field=field, operator=eligibility.operator, value=literal)],
+        logical_operator=LogicalOperator.AND,
+        description=f"Risk attribute condition matching '{diff.node_id}' eligibility ({field} {eligibility.operator.value} {literal}).",
+    )
 
 
 def derive_predicate_from_difference(
     diff: SemanticDifference, package: IPIRPackage
-) -> ImpactPredicate | None:
-    """Derives a structured ImpactPredicate describing policy risk conditions exercising a diff."""
+) -> ImpactPredicate:
+    """Derives a structured ImpactPredicate describing policy risk conditions exercising a
+    diff. Always returns a predicate -- one with no clauses matches every policy (see
+    `_global_predicate`), which is the honest answer for a diff type this module can't
+    translate into narrower risk conditions, not an excuse to drop it from scope silently."""
     # 1. Effective Date Drift
     if diff.difference_type == DifferenceType.EFFECTIVE_DATE_CHANGE:
         start_a = date.fromisoformat(str(diff.left_value)) if diff.left_value else None
@@ -41,7 +90,7 @@ def derive_predicate_from_difference(
     ):
         table = next((t for t in package.tables if t.id == diff.node_id), None)
         if not table:
-            return None
+            return _global_predicate(diff)
 
         dim_key = diff.metadata.get("dimension_key", "")
         key_parts = dim_key.split("|")
@@ -84,7 +133,31 @@ def derive_predicate_from_difference(
             description=f"Risk attributes matching table lookup '{table.id}' key [{dim_key}]",
         )
 
-    return None
+    # 3. Modifier Value/Sequence Changes -- a discount/surcharge only applies
+    # to the policies its own `eligibility` condition selects (e.g.
+    # `multi_policy == true`); a modifier with no eligibility applies to
+    # every policy, same as a fee or constraint below.
+    if diff.difference_type == DifferenceType.MODIFIER_CHANGE:
+        modifier = next((m for m in package.modifiers if m.id == diff.node_id), None)
+        if modifier is not None and isinstance(modifier.eligibility, ComparisonCondition):
+            pred = _predicate_from_eligibility(diff, modifier.eligibility)
+            if pred is not None:
+                return pred
+        return _global_predicate(diff)
+
+    # 4. Fee and Constraint Changes -- neither carries an eligibility
+    # condition in the IPIR schema (see app.ipir.constraints), so both are
+    # unconditionally global: every policy that reaches the affected
+    # calculation node is exposed.
+    if diff.difference_type in (DifferenceType.FEE_CHANGE, DifferenceType.CONSTRAINT_CHANGE):
+        return _global_predicate(diff)
+
+    # 5. Anything else this module doesn't have a specific translation for
+    # yet (VALUE_CHANGE on a constant, RULE_CHANGE, ORDER_CHANGE, ROUNDING_
+    # CHANGE, OUTPUT_CHANGE, ...) still deserves a predicate rather than
+    # silently vanishing from blast-radius/boundary-test scope -- see
+    # `_global_predicate`'s docstring.
+    return _global_predicate(diff)
 
 
 def derive_predicates_from_package(package: IPIRPackage) -> list[ImpactPredicate]:
