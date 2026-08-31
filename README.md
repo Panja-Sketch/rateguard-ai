@@ -241,7 +241,47 @@ Deployment to Google Cloud Run follows a staged pipeline, implemented in `infras
 
 ## Screenshots & Video
 
-_Add links to a demo video and screenshots here before final submission._
+### Demo Video
+
+[▶ Watch the RateGuard AI Demo on YouTube](https://youtu.be/XqSU7EnHy3w)
+
+### Release Conformance — BLOCK_DEPLOYMENT
+
+RateGuard detects semantic pricing drift, reproduces the premium mismatch, identifies the root cause, quantifies portfolio impact, and blocks the unsafe release.
+
+![RateGuard BLOCK_DEPLOYMENT](docs/media/rateguard-block-deployment.png)
+
+### Production Architecture
+
+RateGuard runs as an asynchronous Google Cloud architecture using Cloud Run, Pub/Sub, Firestore, BigQuery, Cloud Storage, and Gemini on Vertex AI.
+
+![RateGuard Architecture](docs/media/rateguard-architecture.png)
+
+### Reconciliation & Root Cause Analysis
+
+The deterministic reconciliation engine identifies the first pricing node where the two implementations diverge.
+
+![RateGuard Reconciliation](docs/media/rateguard-reconciliation.png)
+
+### Portfolio Blast Radius
+
+Confirmed pricing defects are evaluated against the synthetic 50,000-policy Arizona HO3 portfolio.
+
+![RateGuard Blast Radius](docs/media/rateguard-blast-radius.png)
+
+### Gemini Action Timeline
+
+Gemini is used only at bounded, schema-validated decision points while deterministic engines provide the pricing evidence.
+
+![Gemini Action Timeline](docs/media/rateguard-gemini-timeline-1.png)
+![Gemini Action Timeline](docs/media/rateguard-gemini-timeline-2.png)
+
+### Clean Control — PASS
+
+Equivalent sources return PASS with zero semantic differences and show “Gemini not invoked by design.”
+
+![RateGuard PASS](docs/media/rateguard-pass.png)
+
 
 ## Test Results
 
